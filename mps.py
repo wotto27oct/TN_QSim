@@ -1,3 +1,4 @@
+from math import trunc
 from typing import ValuesView
 import numpy as np
 from numpy.core.fromnumeric import _reshape_dispatcher
@@ -17,15 +18,16 @@ class MPS(TensorNetwork):
         edges (list of list of int) : the orderd indexes of each edge connected to each tensor
         edge_dims (dict of int) : dims of each edges
         tensors (list of np.array) : each tensor, [physical, virtual_left, virtual_right]
-
+        truncate_dim (int) : truncation dim of virtual bond, default None
     """
 
-    def __init__(self, tensors):
+    def __init__(self, tensors, truncate_dim=None):
         self.n = len(tensors)
         self.apex = None
         self.edges = []
         self.edge_dims = dict()
         self.tensors = tensors
+        self.truncate_dim = truncate_dim
         for i in range(self.n):
             self.edges.append([i, i+self.n, i+self.n+1])
             self.edge_dims[i] = self.tensors[i].shape[0]
@@ -69,6 +71,10 @@ class MPS(TensorNetwork):
         Args:
             tidx (list of int) : list of qubit index we apply to
             gtensor (np.array) : gate tensor, shape must be (pdim, pdim, pdim, pdim)
+            is_finishing_right (bool) : if True, set apex to the right-hand
+
+        Return:
+            fidelity (float) : approximation accuracy as fidelity
         """
 
         if np.abs(tidx[1] - tidx[0]) != 1:
@@ -89,16 +95,46 @@ class MPS(TensorNetwork):
             whole_tensor = oe.contract("acd,bde,gfba->fcge", self.tensors[left_idx], self.tensors[left_idx+1], gtensor)
         reshape_dim = whole_tensor.shape[0] * whole_tensor.shape[1]
         U, s, Vh = np.linalg.svd(whole_tensor.reshape(reshape_dim, -1), full_matrices=False)
+        virtual_dim = s.shape[0]
+        if self.truncate_dim is not None:
+            virtual_dim = self.truncate_dim
         if is_finising_right:
-            self.tensors[left_idx] = U.reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], -1)
-            self.tensors[left_idx+1] = oe.contract("ab,bc->ac", np.diag(s), Vh).reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[2]).transpose(1,0,2)
+            self.tensors[left_idx] = U[:,:virtual_dim].reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], -1)
+            self.tensors[left_idx+1] = oe.contract("ab,bc->ac", np.diag(s[:virtual_dim]), Vh[:virtual_dim]).reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[2]).transpose(1,0,2)
             self.apex = left_idx + 1
         else:
-            self.tensors[left_idx+1] = Vh.reshape(self.tensors[left_idx+1].shape[0], -1, self.tensors[left_idx+1].shape[2])
-            self.tensors[left_idx] = oe.contract("ab,bc->ac", U, np.diag(s)).reshape(self.tensors[left_idx].shape[1], self.tensors[left_idx].shape[0], -1).tranpose(1,0,2)
+            self.tensors[left_idx+1] = Vh[:virtual_dim].reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[2]).transpose(1,0,2)
+            self.tensors[left_idx] = oe.contract("ab,bc->ac", U[:,:virtual_dim], np.diag(s[:virtual_dim])).reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], -1)
             self.apex = left_idx
         self.edge_dims[left_idx + self.n + 1] = self.tensors[left_idx].shape[2]
 
+        fidelity = np.dot(s[:virtual_dim], s[:virtual_dim])
+        self.tensors[self.apex] = self.tensors[self.apex] / np.sqrt(fidelity)
+        return fidelity
+
+    def sample(self, seed=0):
+        """ sample from mps
+        """
+        for _ in range(self.apex, 0, -1):
+            self.__move_left_canonical()
+
+        np.random.seed(seed)
+
+        output = []
+        left_tensor = np.array([1])
+        zero = np.array([1, 0])
+        one = np.array([0, 1])
+        for i in range(self.n):
+            prob_matrix = oe.contract("abc,b,dec,e->ad", self.tensors[i], left_tensor, self.tensors[i].conj(), left_tensor.conj())
+            rand_val = np.random.uniform()
+            if rand_val < prob_matrix[0][0] / np.trace(prob_matrix):
+                output.append(0)
+                left_tensor = oe.contract("abc,a,b->c", self.tensors[i], zero, left_tensor)
+            else:
+                output.append(1)
+                left_tensor = oe.contract("abc,a,b->c", self.tensors[i], one, left_tensor)
+        
+        return np.array(output)
 
     def __move_right_canonical(self):
         """ move canonical apex to right
