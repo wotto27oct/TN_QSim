@@ -65,7 +65,7 @@ class MPS(TensorNetwork):
         self.tensors[tidx] = oe.contract("abc,da->dbc", self.tensors[tidx], gtensor)
         self.edge_dims[tidx] = self.tensors[tidx].shape[0]
 
-    def apply_2qubit_gate(self, tidx, gtensor, is_finising_right=True):
+    def apply_2qubit_gate(self, tidx, gtensor, is_finishing_right=True):
         """ apply 2qubit gate
         
         Args:
@@ -98,7 +98,7 @@ class MPS(TensorNetwork):
         virtual_dim = s.shape[0]
         if self.truncate_dim is not None:
             virtual_dim = self.truncate_dim
-        if is_finising_right:
+        if is_finishing_right:
             self.tensors[left_idx] = U[:,:virtual_dim].reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], -1)
             self.tensors[left_idx+1] = oe.contract("ab,bc->ac", np.diag(s[:virtual_dim]), Vh[:virtual_dim]).reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[2]).transpose(1,0,2)
             self.apex = left_idx + 1
