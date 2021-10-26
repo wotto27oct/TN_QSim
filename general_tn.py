@@ -30,7 +30,7 @@ class TensorNetwork():
         edge_list = dict()
 
         for i in range(self.n):
-            self.nodes.append(tn.Node(tensors[i]))
+            self.nodes.append(tn.Node(tensors[i], axis_names=[str(10*i+j) for j in range(tensors[i].ndim)]))
             for j in range(len(edges[i])):
                 if edges[i][j] in edge_list:
                     if edge_list[edges[i][j]][2] == True:
@@ -42,18 +42,19 @@ class TensorNetwork():
                     edge_list[edges[i][j]] = [i, j, False]
 
     def contract(self, output_edge_order=None):
-        """contract the whole Tensor Network
+        """contract the whole Tensor Network destructively
 
         Args:
-            output_edge_order (list of int) : the order of output edge
+            output_edge_order (list of tn.Edge) : the order of output edge
         
         Returns:
             np.array: tensor after contraction
         """
 
-        tn_copy = tn.replicate_nodes(self.nodes)
+        if output_edge_order == None:
+            return tn.contractors.auto(self.nodes, ignore_edge_order=True).tensor
 
-        return tn.contractors.auto(tn_copy, output_edge_order=output_edge_order).tensor
+        return tn.contractors.auto(self.nodes, output_edge_order=output_edge_order).tensor
 
     def replace_tensors(self, tensor_indexes, r_tensors):
         """replace tensors
@@ -66,8 +67,4 @@ class TensorNetwork():
         for i, tidx in enumerate(tensor_indexes):
             if r_tensors[i].ndim != self.nodes[tidx].get_rank():
                 raise ValueError("the ndim of replaced tensors do not correspond")
-            for order in range(r_tensors[i].ndim):
-                if r_tensors[i].shape[order] != self.nodes[tidx].get_dimension(order):
-                    raise ValueError("the dims of replaced tensors do not correspond ")
-            
-            self.tensors[tidx].set_tensor(r_tensors[i])
+            self.nodes[tidx].set_tensor(r_tensors[i])
