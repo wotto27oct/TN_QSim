@@ -98,36 +98,40 @@ class MPS(TensorNetwork):
         node_edges = []
         for i in range(len(tidx)):
             node_edges.append(gate[i])
-        node_edges.append(self.nodes[tidx[0]][1])
-        node_edges.append(self.nodes[tidx[-1]][2])
+            gate[i].set_name(f"edge {tidx[i]}")
+        if is_direction_right:
+            node_edges.append(self.nodes[tidx[0]][1])
+            node_edges.append(self.nodes[tidx[-1]][2])
+        else:
+            node_edges.append(self.nodes[tidx[0]][2])
+            node_edges.append(self.nodes[tidx[-1]][1])
 
         tmp = tn.contractors.optimal([self.nodes[i] for i in tidx] + [gate], ignore_edge_order=True)
-        inner_edge = node_edges[-2] if is_direction_right else node_edges[-1]
+        inner_edge = node_edges[-2]
 
         for i in range(len(tidx)-1):
             left_edges = []
             right_edges = []
-            if is_direction_right:
-                left_edges.append(node_edges[i])
-                left_edges.append(inner_edge)
-                for j in range(len(tidx)-1-i):
-                    right_edges.append(node_edges[i+j+1])
-                right_edges.append(node_edges[-1])
-            else:
-                left_edges.append(node_edges[len(tidx)-1-i])
-                left_edges.append(inner_edge)
-                for j in range(len(tidx)-1-i):
-                    right_edges.append(node_edges[len(tidx)-i-j-2])
-                right_edges.append(node_edges[-2])
+            left_edges.append(node_edges[i])
+            left_edges.append(inner_edge)
+            for j in range(len(tidx)-1-i):
+                right_edges.append(node_edges[i+j+1])
+            right_edges.append(node_edges[-1])
             U, s, Vh, _ = tn.split_node_full_svd(tmp, left_edges, right_edges)
-            U_reshape_edges = [node_edges[i], inner_edge, s[0]] if is_direction_right else [node_edges[len(tidx)-1-i], s[0], inner_edge]
+            U_reshape_edges = [node_edges[i], inner_edge, s[0]] if is_direction_right else [node_edges[i], s[0], inner_edge]
             self.nodes[tidx[i]] = U.reorder_edges(U_reshape_edges)
             inner_edge = s[0]
             tmp = tn.contractors.optimal([s, Vh], ignore_edge_order=True)
+
+            self.nodes[tidx[i]].set_name(f"node {tidx[i]}")
+            if is_direction_right:
+                self.nodes[tidx[i]][2].set_name(f"edge {tidx[i]+self.n+1}")
+            else:
+                self.nodes[tidx[i]][1].set_name(f"edge {tidx[i]+self.n}")
         
-        U_reshape_edges = [node_edges[len(tidx)-1], inner_edge, node_edges[-1]] if is_direction_right else [node_edges[0], node_edges[-2], inner_edge]
+        U_reshape_edges = [node_edges[len(tidx)-1], inner_edge, node_edges[-1]] if is_direction_right else [node_edges[len(tidx)-1], node_edges[-1], inner_edge]
         self.nodes[tidx[-1]] = tmp.reorder_edges(U_reshape_edges)
-        
+        self.nodes[tidx[-1]].set_name(f"node {tidx[-1]}")
         
 
     def apply_single_qubit_gate(self, tidx, gtensor):
@@ -229,6 +233,11 @@ class MPS(TensorNetwork):
         U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]])
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], s[0]])
         self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh], output_edge_order=[r_edges[0], s[0], r_edges[2]])
+
+        self.nodes[self.apex].set_name(f"node {self.apex}")
+        self.nodes[self.apex+1].set_name(f"node {self.apex+1}")
+        self.nodes[self.apex][2].set_name(f"edge {self.apex+self.n+1}")
+
         self.apex = self.apex + 1
 
     def __move_left_canonical(self):
@@ -242,4 +251,9 @@ class MPS(TensorNetwork):
         U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]])
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], s[1], r_edges[2]])
         self.nodes[self.apex-1] = tn.contractors.optimal([U, s], output_edge_order=[l_edges[0], l_edges[1], s[1]])
+
+        self.nodes[self.apex].set_name(f"node {self.apex}")
+        self.nodes[self.apex-1].set_name(f"node {self.apex-1}")
+        self.nodes[self.apex][1].set_name(f"edge {self.apex+self.n}")
+
         self.apex = self.apex - 1

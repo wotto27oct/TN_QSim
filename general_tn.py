@@ -30,16 +30,18 @@ class TensorNetwork():
         edge_list = dict()
 
         for i in range(self.n):
-            self.nodes.append(tn.Node(tensors[i], axis_names=[str(10*i+j) for j in range(tensors[i].ndim)]))
+            self.nodes.append(tn.Node(tensors[i], name=f"node {i}"))
+            node_edges = self.nodes[i].get_all_edges()
             for j in range(len(edges[i])):
                 if edges[i][j] in edge_list:
                     if edge_list[edges[i][j]][2] == True:
                         raise ValueError("HyperEdge is not allowed")
-                    conn = self.nodes[edge_list[edges[i][j]][0]][edge_list[edges[i][j]][1]] ^ self.nodes[i][j]
+                    conn = tn.connect(self.nodes[edge_list[edges[i][j]][0]][edge_list[edges[i][j]][1]], self.nodes[i][j], name=f"edge {edges[i][j]}")
                     edge_list[edges[i][j]][2] = True
                     self.edges.append(conn)
                 else:
                     edge_list[edges[i][j]] = [i, j, False]
+                    node_edges[j].set_name(f"edge {edges[i][j]}")
 
     def contract(self, output_edge_order=None):
         """contract the whole Tensor Network destructively
