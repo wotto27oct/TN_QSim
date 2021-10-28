@@ -117,7 +117,7 @@ class MPS(TensorNetwork):
             for j in range(len(tidx)-1-i):
                 right_edges.append(node_edges[i+j+1])
             right_edges.append(node_edges[-1])
-            U, s, Vh, _ = tn.split_node_full_svd(tmp, left_edges, right_edges)
+            U, s, Vh, _ = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threthold_err)
             U_reshape_edges = [node_edges[i], inner_edge, s[0]] if is_direction_right else [node_edges[i], s[0], inner_edge]
             self.nodes[tidx[i]] = U.reorder_edges(U_reshape_edges)
             inner_edge = s[0]
@@ -230,7 +230,7 @@ class MPS(TensorNetwork):
         l_edges = self.nodes[self.apex].get_all_edges()
         r_edges = self.nodes[self.apex+1].get_all_edges()
         tmp = tn.contractors.optimal(self.nodes[self.apex:self.apex+2], output_edge_order=[l_edges[0], l_edges[1], r_edges[0], r_edges[2]])
-        U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]])
+        U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]], self.truncate_dim, self.threthold_err)
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], s[0]])
         self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh], output_edge_order=[r_edges[0], s[0], r_edges[2]])
 
@@ -248,7 +248,7 @@ class MPS(TensorNetwork):
         l_edges = self.nodes[self.apex-1].get_all_edges()
         r_edges = self.nodes[self.apex].get_all_edges()
         tmp = tn.contractors.optimal(self.nodes[self.apex-1:self.apex+1], output_edge_order=[l_edges[0], l_edges[1], r_edges[0], r_edges[2]])
-        U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]])
+        U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]], self.truncate_dim, self.threthold_err)
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], s[1], r_edges[2]])
         self.nodes[self.apex-1] = tn.contractors.optimal([U, s], output_edge_order=[l_edges[0], l_edges[1], s[1]])
 
