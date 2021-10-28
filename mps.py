@@ -109,6 +109,8 @@ class MPS(TensorNetwork):
         tmp = tn.contractors.optimal([self.nodes[i] for i in tidx] + [gate], ignore_edge_order=True)
         inner_edge = node_edges[-2]
 
+        total_fidelity = 1.0
+
         for i in range(len(tidx)-1):
             left_edges = []
             right_edges = []
@@ -117,7 +119,7 @@ class MPS(TensorNetwork):
             for j in range(len(tidx)-1-i):
                 right_edges.append(node_edges[i+j+1])
             right_edges.append(node_edges[-1])
-            U, s, Vh, _ = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threthold_err)
+            U, s, Vh, trun_s = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threthold_err)
             U_reshape_edges = [node_edges[i], inner_edge, s[0]] if is_direction_right else [node_edges[i], s[0], inner_edge]
             self.nodes[tidx[i]] = U.reorder_edges(U_reshape_edges)
             inner_edge = s[0]
@@ -128,75 +130,20 @@ class MPS(TensorNetwork):
                 self.nodes[tidx[i]][2].set_name(f"edge {tidx[i]+self.n+1}")
             else:
                 self.nodes[tidx[i]][1].set_name(f"edge {tidx[i]+self.n}")
+            
+            fidelity = 1.0 - np.dot(trun_s, trun_s)
+            total_fidelity *= fidelity
+
         
         U_reshape_edges = [node_edges[len(tidx)-1], inner_edge, node_edges[-1]] if is_direction_right else [node_edges[len(tidx)-1], node_edges[-1], inner_edge]
         self.nodes[tidx[-1]] = tmp.reorder_edges(U_reshape_edges)
         self.nodes[tidx[-1]].set_name(f"node {tidx[-1]}")
+
+        if self.apex is not None:
+            self.apex = tidx[-1]
+            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
         
-
-    def apply_single_qubit_gate(self, tidx, gtensor):
-        """ apply single qubit gate
-        
-        Args:
-            tidx (int) : qubit index we apply to
-            gtensor (np.array) : gate tensor
-        """
-        if tidx < self.apex:
-            for _ in range(self.apex - tidx):
-                self.__move_left_canonical()
-        elif tidx > self.apex:
-            for _ in range(tidx - self.apex):
-                self.__move_right_canonical()
-        
-        self.tensors[tidx] = oe.contract("abc,da->dbc", self.tensors[tidx], gtensor)
-        self.edge_dims[tidx] = self.tensors[tidx].shape[0]
-
-    def apply_2qubit_gate(self, tidx, gtensor, is_finishing_right=True):
-        """ apply 2qubit gate
-        
-        Args:
-            tidx (list of int) : list of qubit index we apply to
-            gtensor (np.array) : gate tensor, shape must be (pdim, pdim, pdim, pdim)
-            is_finishing_right (bool) : if True, set apex to the right-hand
-
-        Return:
-            fidelity (float) : approximation accuracy as fidelity
-        """
-
-        if np.abs(tidx[1] - tidx[0]) != 1:
-            raise ValueError("2qubit gate must be applied to adjacent qubit")
-        
-        if tidx[0] < self.apex and tidx[1] < self.apex:
-            for _ in range(self.apex - max(tidx[0], tidx[1])):
-                self.__move_left_canonical()
-        elif tidx[0] > self.apex and tidx[1] > self.apex:
-            for _ in range(min(tidx[0], tidx[1]) - self.apex):
-                self.__move_right_canonical()
-
-        whole_tensor = None
-        left_idx = min(tidx)
-        if tidx[1] - tidx[0] == 1:
-            whole_tensor = oe.contract("acd,bde,fgab->fcge", self.tensors[left_idx], self.tensors[left_idx+1], gtensor)
-        else:
-            whole_tensor = oe.contract("acd,bde,gfba->fcge", self.tensors[left_idx], self.tensors[left_idx+1], gtensor)
-        reshape_dim = whole_tensor.shape[0] * whole_tensor.shape[1]
-        U, s, Vh = np.linalg.svd(whole_tensor.reshape(reshape_dim, -1), full_matrices=False)
-        virtual_dim = s.shape[0]
-        if self.truncate_dim is not None:
-            virtual_dim = self.truncate_dim
-        if is_finishing_right:
-            self.tensors[left_idx] = U[:,:virtual_dim].reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], -1)
-            self.tensors[left_idx+1] = oe.contract("ab,bc->ac", np.diag(s[:virtual_dim]), Vh[:virtual_dim]).reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[2]).transpose(1,0,2)
-            self.apex = left_idx + 1
-        else:
-            self.tensors[left_idx+1] = Vh[:virtual_dim].reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[2]).transpose(1,0,2)
-            self.tensors[left_idx] = oe.contract("ab,bc->ac", U[:,:virtual_dim], np.diag(s[:virtual_dim])).reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], -1)
-            self.apex = left_idx
-        self.edge_dims[left_idx + self.n + 1] = self.tensors[left_idx].shape[2]
-
-        fidelity = np.dot(s[:virtual_dim], s[:virtual_dim])
-        self.tensors[self.apex] = self.tensors[self.apex] / np.sqrt(fidelity)
-        return fidelity
+        return total_fidelity
 
     def sample(self, seed=0):
         """ sample from mps
@@ -211,16 +158,17 @@ class MPS(TensorNetwork):
         zero = np.array([1, 0])
         one = np.array([0, 1])
         for i in range(self.n):
-            prob_matrix = oe.contract("abc,b,dec,e->ad", self.tensors[i], left_tensor, self.tensors[i].conj(), left_tensor.conj())
+            prob_matrix = oe.contract("abc,b,dec,e->ad", self.nodes[i].tensor, left_tensor, self.nodes[i].tensor.conj(), left_tensor.conj())
             rand_val = np.random.uniform()
             if rand_val < prob_matrix[0][0] / np.trace(prob_matrix):
                 output.append(0)
-                left_tensor = oe.contract("abc,a,b->c", self.tensors[i], zero, left_tensor)
+                left_tensor = oe.contract("abc,a,b->c", self.nodes[i].tensor, zero.conj(), left_tensor)
             else:
                 output.append(1)
-                left_tensor = oe.contract("abc,a,b->c", self.tensors[i], one, left_tensor)
+                left_tensor = oe.contract("abc,a,b->c", self.nodes[i].tensor, one.conj(), left_tensor)
         
         return np.array(output)
+
 
     def __move_right_canonical(self):
         """ move canonical apex to right
@@ -229,10 +177,9 @@ class MPS(TensorNetwork):
             raise ValueError("can't move canonical apex to right")
         l_edges = self.nodes[self.apex].get_all_edges()
         r_edges = self.nodes[self.apex+1].get_all_edges()
-        tmp = tn.contractors.optimal(self.nodes[self.apex:self.apex+2], output_edge_order=[l_edges[0], l_edges[1], r_edges[0], r_edges[2]])
-        U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]], self.truncate_dim, self.threthold_err)
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1]], [l_edges[2]])
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], s[0]])
-        self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh], output_edge_order=[r_edges[0], s[0], r_edges[2]])
+        self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh, self.nodes[self.apex+1]], output_edge_order=[r_edges[0], s[0], r_edges[2]])
 
         self.nodes[self.apex].set_name(f"node {self.apex}")
         self.nodes[self.apex+1].set_name(f"node {self.apex+1}")
@@ -240,6 +187,7 @@ class MPS(TensorNetwork):
 
         self.apex = self.apex + 1
 
+    
     def __move_left_canonical(self):
         """ move canonical apex to right
         """
@@ -247,10 +195,9 @@ class MPS(TensorNetwork):
             raise ValueError("can't move canonical apex to left")
         l_edges = self.nodes[self.apex-1].get_all_edges()
         r_edges = self.nodes[self.apex].get_all_edges()
-        tmp = tn.contractors.optimal(self.nodes[self.apex-1:self.apex+1], output_edge_order=[l_edges[0], l_edges[1], r_edges[0], r_edges[2]])
-        U, s, Vh, _ = tn.split_node_full_svd(tmp, [l_edges[0], l_edges[1]], [r_edges[0], r_edges[2]], self.truncate_dim, self.threthold_err)
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[1]], [r_edges[0], r_edges[2]])
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], s[1], r_edges[2]])
-        self.nodes[self.apex-1] = tn.contractors.optimal([U, s], output_edge_order=[l_edges[0], l_edges[1], s[1]])
+        self.nodes[self.apex-1] = tn.contractors.optimal([self.nodes[self.apex-1], U, s], output_edge_order=[l_edges[0], l_edges[1], s[1]])
 
         self.nodes[self.apex].set_name(f"node {self.apex}")
         self.nodes[self.apex-1].set_name(f"node {self.apex-1}")
