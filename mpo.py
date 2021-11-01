@@ -90,7 +90,7 @@ class MPO(TensorNetwork):
                 is_direction_right = True
         for i in range(len(tidx)-1):
             if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
-                raise ValueError("gate must be applied in sequential to MPS")
+                raise ValueError("gate must be applied in sequential to MPO")
         
         reshape_list = []
         for i in tidx:
@@ -153,167 +153,102 @@ class MPO(TensorNetwork):
 
         if self.apex is not None:
             self.apex = tidx[-1]
-            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
+        
+        self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / self.calc_trace().flatten()[0]
         
         return total_fidelity
 
 
-    def apply_single_qubit_gate(self, tidx, gtensor):
-        """ apply single qubit gate
+    def apply_CPTP(self, tidx, gtensor):
+        """ apply nqubit gate
         
         Args:
-            tidx (int) : qubit index we apply to
-            gtensor (np.array) : gate tensor
-        """
-        if self.apex is not None:
-            if tidx < self.apex:
-                for _ in range(self.apex - tidx):
-                    self.__move_left_canonical()
-            elif tidx > self.apex:
-                for _ in range(tidx - self.apex):
-                    self.__move_right_canonical()
-        
-        self.tensors[tidx] = oe.contract("abcd,ea,fb->efcd", self.tensors[tidx], gtensor, gtensor.conj())
-        self.edge_dims[tidx] = self.tensors[tidx].shape[0]
-        self.edge_dims[tidx+self.n] = self.tensors[tidx].shape[1]
-
-    def apply_single_qubit_CPTP(self, tidx, gtensor):
-        """ apply single qubit CPTP
-        
-        Args:
-            tidx (int) : qubit index we apply to
-            gtensor (np.array) : gate tensor
-        """
-        if self.apex is not None:
-            if tidx < self.apex:
-                for _ in range(self.apex - tidx):
-                    self.__move_left_canonical()
-            elif tidx > self.apex:
-                for _ in range(tidx - self.apex):
-                    self.__move_right_canonical()
-        
-        self.tensors[tidx] = oe.contract("abcd,efab->efcd", self.tensors[tidx], gtensor)
-        self.edge_dims[tidx] = self.tensors[tidx].shape[0]
-        self.edge_dims[tidx+self.n] = self.tensors[tidx].shape[1]
-
-    def apply_2qubit_gate(self, tidx, gtensor, is_finishing_right=True):
-        """ apply 2qubit gate
-        
-        Args:
-            tidx (list of int) : list of qubit index we apply to
-            gtensor (np.array) : gate tensor, shape must be (pdim, pdim, pdim, pdim)
-            is_finishing_right (bool) : if True, set apex to the right-hand
+            tidx (list of int) : list of qubit index we apply to. the apex is to be the last index.
+            gtensor (np.array) : gate tensor, receive (ABab) tensor applied to (ab) state. shape must be (new_pdim, new_pdim, ..., new_pdim, new_pdim, ..., old_pdim, old_pdim, ..., old_pdim, old_pdim, ...).
 
         Return:
             fidelity (float) : approximation accuracy as fidelity
         """
 
-        if np.abs(tidx[1] - tidx[0]) != 1:
-            raise ValueError("2qubit gate must be applied to adjacent qubit")
-        
+        # apexをtidx[0]に合わせる
         if self.apex is not None:
-            if tidx[0] < self.apex and tidx[1] < self.apex:
-                for _ in range(self.apex - max(tidx[0], tidx[1])):
+            if tidx[0] < self.apex:
+                for _ in range(self.apex - tidx[0]):
                     self.__move_left_canonical()
-            elif tidx[0] > self.apex and tidx[1] > self.apex:
-                for _ in range(min(tidx[0], tidx[1]) - self.apex):
+            elif tidx[0] > self.apex:
+                for _ in range(tidx[0] - self.apex):
                     self.__move_right_canonical()
-
-        whole_tensor = None
-        left_idx = min(tidx)
-        if tidx[1] - tidx[0] == 1:
-            # in the case of [i, i+1]
-            whole_tensor = oe.contract("acef,bdfg,hiab,jkcd->hjeikg", self.tensors[left_idx], self.tensors[left_idx+1], gtensor, gtensor.conj())
+    
+        is_direction_right = False
+        if len(tidx) == 1:
+            is_direction_right = True
         else:
-            whole_tensor = oe.contract("acef,bdfg,ihba,kjdc->hjeikg", self.tensors[left_idx], self.tensors[left_idx+1], gtensor, gtensor.conj())
-        reshape_dim = whole_tensor.shape[0] * whole_tensor.shape[1] * whole_tensor.shape[2]
-        U, s, Vh = np.linalg.svd(whole_tensor.reshape(reshape_dim, -1), full_matrices=False)
-        virtual_dim = s.shape[0]
-        if self.truncate_dim is not None:
-            virtual_dim = self.truncate_dim
-        else:
-            virtual_dim = min((i for i in range(s.shape[0]) if s[i] < self.threthold), default=s.shape[0])
-            #print(s.shape[0], virtual_dim)
-        if is_finishing_right:
-            self.tensors[left_idx] = U[:,:virtual_dim].reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], self.tensors[left_idx].shape[2], -1)
-            self.tensors[left_idx+1] = oe.contract("ab,bc->ac", np.diag(s[:virtual_dim]), Vh[:virtual_dim]).reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[1], self.tensors[left_idx+1].shape[3]).transpose(1,2,0,3)
-            if self.apex is not None:
-                self.apex = left_idx + 1
-        else:
-            self.tensors[left_idx+1] = Vh[:virtual_dim].reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[1], self.tensors[left_idx+1].shape[3]).transpose(1,2,0,3)
-            self.tensors[left_idx] = oe.contract("ab,bc->ac", U[:,:virtual_dim], np.diag(s[:virtual_dim])).reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1],self.tensors[left_idx].shape[2], -1)
-            if self.apex is not None:
-                self.apex = left_idx
-        self.edge_dims[left_idx + 2*self.n + 1] = self.tensors[left_idx].shape[3]
-
-        fidelity = np.dot(s[:virtual_dim], s[:virtual_dim])
-        #print("fid", fidelity)
-        if is_finishing_right:
-            self.tensors[left_idx+1] = self.tensors[left_idx+1] / self.calc_trace().flatten()[0]
-        else:
-            self.tensors[left_idx] = self.tensors[left_idx] / self.calc_trace().flatten()[0]
-
-        #print("trace", self.calc_trace().flatten())
-        return fidelity
-
-    def apply_2qubit_CPTP(self, tidx, gtensor, is_finishing_right=True):
-        """ apply 2qubit CPTP
+            if tidx[1] - tidx[0] == 1:
+                is_direction_right = True
+        for i in range(len(tidx)-1):
+            if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
+                raise ValueError("gate must be applied in sequential to MPO")
         
-        Args:
-            tidx (list of int) : list of qubit index we apply to
-            gtensor (np.array) : gate tensor, shape must be (pdim, pdim, pdim, pdim, pdim, pdim, pdim, pdim)
-            is_finishing_right (bool) : if True, set apex to the right-hand
+        gate = tn.Node(gtensor)
+        for i in range(len(tidx)):
+            self.nodes[tidx[i]][0] ^ gate[i+2*len(tidx)]
+            self.nodes[tidx[i]][1] ^ gate[i+3*len(tidx)]
 
-        Return:
-            fidelity (float) : approximation accuracy as fidelity
-        """
+        node_edges = []
+        for i in range(len(tidx)):
+            node_edges.append(gate[i])
+            gate[i].set_name(f"edge {tidx[i]}")
+        for i in range(len(tidx)):
+            node_edges.append(gate[i+len(tidx)])
+            gate[i].set_name(f"edge {tidx[i]+self.n}")
+        if is_direction_right:
+            node_edges.append(self.nodes[tidx[0]][2])
+            node_edges.append(self.nodes[tidx[-1]][3])
+        else:
+            node_edges.append(self.nodes[tidx[0]][3])
+            node_edges.append(self.nodes[tidx[-1]][2])
 
-        if np.abs(tidx[1] - tidx[0]) != 1:
-            raise ValueError("2qubit gate must be applied to adjacent qubit")
+        tmp = tn.contractors.optimal([self.nodes[i] for i in tidx] + [gate], ignore_edge_order=True)
+        inner_edge = node_edges[-2]
+
+        total_fidelity = 1.0
+
+        for i in range(len(tidx)-1):
+            left_edges = []
+            right_edges = []
+            left_edges.append(node_edges[i])
+            left_edges.append(node_edges[i+len(tidx)])
+            left_edges.append(inner_edge)
+            for j in range(len(tidx)-1-i):
+                right_edges.append(node_edges[i+j+1])
+                right_edges.append(node_edges[i+j+1+len(tidx)])
+            right_edges.append(node_edges[-1])
+            U, s, Vh, trun_s = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threthold_err)
+            U_reshape_edges = [node_edges[i], node_edges[i+len(tidx)], inner_edge, s[0]] if is_direction_right else [node_edges[i], node_edges[i+len(tidx)], s[0], inner_edge]
+            self.nodes[tidx[i]] = U.reorder_edges(U_reshape_edges)
+            inner_edge = s[0]
+            tmp = tn.contractors.optimal([s, Vh], ignore_edge_order=True)
+
+            self.nodes[tidx[i]].set_name(f"node {tidx[i]}")
+            if is_direction_right:
+                self.nodes[tidx[i]][2].set_name(f"edge {tidx[i]+2*self.n+1}")
+            else:
+                self.nodes[tidx[i]][1].set_name(f"edge {tidx[i]+2*self.n}")
+            
+            fidelity = 1.0 - np.dot(trun_s, trun_s)
+            total_fidelity *= fidelity
+
         
+        U_reshape_edges = [node_edges[len(tidx)-1], node_edges[2*len(tidx)-1], inner_edge, node_edges[-1]] if is_direction_right else [node_edges[len(tidx)-1], node_edges[2*len(tidx)-1], node_edges[-1], inner_edge]
+        self.nodes[tidx[-1]] = tmp.reorder_edges(U_reshape_edges)
+        self.nodes[tidx[-1]].set_name(f"node {tidx[-1]}")
+
         if self.apex is not None:
-            if tidx[0] < self.apex and tidx[1] < self.apex:
-                for _ in range(self.apex - max(tidx[0], tidx[1])):
-                    self.__move_left_canonical()
-            elif tidx[0] > self.apex and tidx[1] > self.apex:
-                for _ in range(min(tidx[0], tidx[1]) - self.apex):
-                    self.__move_right_canonical()
-
-        whole_tensor = None
-        left_idx = min(tidx)
-        if tidx[1] - tidx[0] == 1:
-            # in the case of [i, i+1]
-            whole_tensor = oe.contract("acef,bdfg,hijkabcd->hjeikg", self.tensors[left_idx], self.tensors[left_idx+1], gtensor)
-        else:
-            whole_tensor = oe.contract("acef,bdfg,ihkjbadc->hjeikg", self.tensors[left_idx], self.tensors[left_idx+1], gtensor)
-        reshape_dim = whole_tensor.shape[0] * whole_tensor.shape[1] * whole_tensor.shape[2]
-        U, s, Vh = np.linalg.svd(whole_tensor.reshape(reshape_dim, -1), full_matrices=False)
-        virtual_dim = s.shape[0]
-        if self.truncate_dim is not None:
-            virtual_dim = self.truncate_dim
-        else:
-            virtual_dim = min((i for i in range(s.shape[0]) if s[i] < self.threthold), default=s.shape[0])
-        if is_finishing_right:
-            self.tensors[left_idx] = U[:,:virtual_dim].reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1], self.tensors[left_idx].shape[2], -1)
-            self.tensors[left_idx+1] = oe.contract("ab,bc->ac", np.diag(s[:virtual_dim]), Vh[:virtual_dim]).reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[1], self.tensors[left_idx+1].shape[3]).transpose(1,2,0,3)
-            if self.apex is not None:
-                self.apex = left_idx + 1
-        else:
-            self.tensors[left_idx+1] = Vh[:virtual_dim].reshape(-1, self.tensors[left_idx+1].shape[0], self.tensors[left_idx+1].shape[1], self.tensors[left_idx+1].shape[3]).transpose(1,2,0,3)
-            self.tensors[left_idx] = oe.contract("ab,bc->ac", U[:,:virtual_dim], np.diag(s[:virtual_dim])).reshape(self.tensors[left_idx].shape[0], self.tensors[left_idx].shape[1],self.tensors[left_idx].shape[2], -1)
-            if self.apex is not None:
-                self.apex = left_idx
-        self.edge_dims[left_idx + 2*self.n + 1] = self.tensors[left_idx].shape[3]
-
-        fidelity = np.dot(s[:virtual_dim], s[:virtual_dim])
-        #print("fid", fidelity)
-        if is_finishing_right:
-            self.tensors[left_idx+1] = self.tensors[left_idx+1] / self.calc_trace().flatten()[0]
-        else:
-            self.tensors[left_idx] = self.tensors[left_idx] / self.calc_trace().flatten()[0]
-
-        #print("trace", self.calc_trace().flatten())
-        return fidelity
+            self.apex = tidx[-1]
+        
+        self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / self.calc_trace().flatten()[0]
+        
+        return total_fidelity
 
     def sample(self, seed=0):
         """ sample from mpo
@@ -329,27 +264,27 @@ class MPO(TensorNetwork):
         #    left_tensor.append(oe.contract("aacd,c->d", self.tensors[i], left_tensor[i]))
         right_tensor = [np.array([1])]
         for i in range(self.n-1, 0, -1):
-            right_tensor.append(oe.contract("aacd,d->c", self.tensors[i], right_tensor[self.n-1-i]))
+            right_tensor.append(oe.contract("aacd,d->c", self.nodes[i].tensor, right_tensor[self.n-1-i]))
         right_tensor = right_tensor[::-1]
         zero = np.array([1, 0])
         one = np.array([0, 1])
         for i in range(self.n):
-            prob_matrix = oe.contract("abcd,c,d->ab", self.tensors[i], left_tensor, right_tensor[i])
+            prob_matrix = oe.contract("abcd,c,d->ab", self.nodes[i].tensor, left_tensor, right_tensor[i])
             rand_val = np.random.uniform()
             if rand_val < prob_matrix[0][0] / np.trace(prob_matrix):
                 output.append(0)
-                left_tensor = oe.contract("abcd,a,b,c->d", self.tensors[i], zero, zero, left_tensor)
+                left_tensor = oe.contract("abcd,a,b,c->d", self.nodes[i].tensor, zero.conj(), zero, left_tensor)
             else:
                 output.append(1)
-                left_tensor = oe.contract("abcd,a,b,c->d", self.tensors[i], one, one, left_tensor)
+                left_tensor = oe.contract("abcd,a,b,c->d", self.nodes[i].tensor, one.conj(), one, left_tensor)
         
         return np.array(output)
 
 
     def calc_trace(self):
-        left_tensor = oe.contract("aacd->cd", self.tensors[0])
+        left_tensor = oe.contract("aacd->cd", self.nodes[0].tensor)
         for i in range(1, self.n):
-            left_tensor = oe.contract("ec,aacd->ed", left_tensor, self.tensors[i])
+            left_tensor = oe.contract("ec,aacd->ed", left_tensor, self.nodes[i].tensor)
         return left_tensor
 
 
