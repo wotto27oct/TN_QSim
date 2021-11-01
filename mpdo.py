@@ -4,8 +4,8 @@ import numpy as np
 from numpy.core.fromnumeric import _reshape_dispatcher
 import opt_einsum as oe
 import cotengra as ctg
-from tensornetwork import TensorNetwork
-import copy
+import tensornetwork as tn
+from general_tn import TensorNetwork
 
 class MPDO(TensorNetwork):
     """class of MPDO
@@ -23,77 +23,35 @@ class MPDO(TensorNetwork):
         truncate_dim (int) : truncation dim of virtual bond, default None
     """
 
-    def __init__(self, tensors, truncate_dim=None, threthold=0.0):
+    def __init__(self, tensors, truncate_dim=None, threthold_err=None):
         self.n = len(tensors)
+        edge_info = []
+        for i in range(self.n):
+            edge_info.append([i, self.n+i, 2*self.n+i, 2*self.n+i+1])
+        super().__init__(edge_info, tensors)
         self.apex = None
-        self.edges = []
-        self.edge_dims = dict()
-        self.tensors = tensors
-        self.is_dangling = dict()
         self.truncate_dim = truncate_dim
-        self.threthold=threthold
+        self.threthold_err = threthold_err
+
+
+    @property
+    def virtual_dims(self):
+        virtual_dims = [self.nodes[0].get_dimension(2)]
         for i in range(self.n):
-            self.edges.append([i, i+self.n, i+2*self.n, i+2*self.n+1])
-            self.edge_dims[i] = self.tensors[i].shape[0]
-            self.edge_dims[i+self.n] = self.tensors[i].shape[1]
-            if i != 0 and self.edge_dims[i+2*self.n] != self.tensors[i].shape[2]:
-                    raise ValueError("the dim of virtual bond do not correspond")
-            if i == 0:
-                self.edge_dims[2*self.n] = self.tensors[i].shape[2]
-            self.edge_dims[i+2*self.n+1] = self.tensors[i].shape[3]
-            self.is_dangling[i] = True
-            self.is_dangling[i+self.n] = True
-            self.is_dangling[i+2*self.n] = False
-            self.is_dangling[i+2*self.n+1] = False
-        self.is_dangling[2*self.n] = True
-        self.is_dangling[3*self.n] = True
+            virtual_dims.append(self.nodes[i].get_dimension(3))
+        return virtual_dims
 
-    def contract(self):
-        """contract the whole Tensor Network
 
-        conjugate tensor is appended.
-
-        all edges which dim is 1 is excluded.
-        
-        Returns:
-            np.array: tensor after contraction
-        """
-        conj_edges = []
-        conj_edge_dims = self.edge_dims.copy()
+    @property
+    def inner_dims(self):
+        inner_dims = []
         for i in range(self.n):
-            conj_edges.append([i+3*self.n+1, i+self.n, i+4*self.n+1, i+4*self.n+2])
-            conj_edge_dims[i+3*self.n+1] = self.tensors[i].shape[0]
-            if i == 0:
-                conj_edge_dims[4*self.n+1] = self.tensors[i].shape[2]
-            conj_edge_dims[i+4*self.n+2] = self.tensors[i].shape[3]
-
-        contract_args = []
-        for i in range(self.n):
-            new_shape = []
-            new_edge = []
-            for order in range(self.tensors[i].ndim):
-                if self.edge_dims[self.edges[i][order]] != 1:
-                    new_shape.append(self.edge_dims[self.edges[i][order]])
-                    new_edge.append(self.edges[i][order])
-            contract_args.append(self.tensors[i].reshape(new_shape))
-            contract_args.append(new_edge)
-        
-        for i in range(self.n):
-            new_shape = []
-            new_edge = []
-            for order in range(self.tensors[i].ndim):
-                if conj_edge_dims[conj_edges[i][order]] != 1:
-                    new_shape.append(conj_edge_dims[conj_edges[i][order]])
-                    new_edge.append(conj_edges[i][order])
-            contract_args.append(self.tensors[i].reshape(new_shape).conj())
-            contract_args.append(new_edge)
-
-        opt = ctg.HyperOptimizer()
-        return oe.contract(*contract_args, optimize=opt)
+            inner_dims.append(self.nodes[i].get_dimension(1))
+        return inner_dims
 
 
     def canonicalization(self):
-        """canonicalize MPS
+        """canonicalize MPDO
         apex point = self.0
 
         """
@@ -102,6 +60,32 @@ class MPDO(TensorNetwork):
             self.__move_right_canonical()
         for i in range(self.n-1):
             self.__move_left_canonical()
+
+
+    def contract(self):
+        """contract and generate density operator.
+
+        conjugate tensor is appended.
+
+        all edges which dim is 1 is excluded.
+        
+        Returns:
+            np.array: tensor after contraction
+        """
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        for i in range(self.n):
+            cp_nodes.append(tn.Node(cp_nodes[i].tensor.conj()))
+            tn.connect(cp_nodes[i][1], cp_nodes[i+self.n][1])
+            if i != 0:
+                tn.connect(cp_nodes[self.n+i-1][3], cp_nodes[self.n+i][2])
+        
+        output_edge_order = [cp_nodes[0][2], cp_nodes[self.n][2], cp_nodes[self.n-1][3], cp_nodes[2*self.n-1][3]]
+        for i in range(self.n):
+            output_edge_order.append(cp_nodes[i][0])
+        for i in range(self.n):
+            output_edge_order.append(cp_nodes[self.n+i][0])
+        return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
+    
 
     def apply_single_qubit_gate(self, tidx, gtensor):
         """ apply single qubit gate
@@ -120,6 +104,7 @@ class MPDO(TensorNetwork):
         
         self.tensors[tidx] = oe.contract("abcd,ea->ebcd", self.tensors[tidx], gtensor)
         self.edge_dims[tidx] = self.tensors[tidx].shape[0]
+
 
     def apply_2qubit_gate(self, tidx, gtensor, is_finishing_right=True):
         """ apply 2qubit gate
@@ -180,6 +165,7 @@ class MPDO(TensorNetwork):
 
         #print("trace", self.calc_trace().flatten())
         return fidelity
+
 
     def apply_MPO_CPTP(self, tidx, mpo):
         """apply MPO CPTP
@@ -284,21 +270,32 @@ class MPDO(TensorNetwork):
         """
         if self.apex == self.n-1:
             raise ValueError("can't move canonical apex to right")
-        reshape_dim = self.tensors[self.apex].shape[3]
-        U, s, Vh = np.linalg.svd(self.tensors[self.apex].reshape(-1, reshape_dim), full_matrices=False)
-        self.tensors[self.apex] = U.reshape([self.tensors[self.apex].shape[0], self.tensors[self.apex].shape[1], self.tensors[self.apex].shape[2], -1])
-        self.tensors[self.apex+1] = oe.contract("ab,be,cdef->cdaf", np.diag(s), Vh, self.tensors[self.apex+1])
-        self.edge_dims[self.apex+2*self.n+1] = self.tensors[self.apex].shape[3]
+        l_edges = self.nodes[self.apex].get_all_edges()
+        r_edges = self.nodes[self.apex+1].get_all_edges()
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]])
+        self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], l_edges[2], s[0]])
+        self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh, self.nodes[self.apex+1]], output_edge_order=[r_edges[0], r_edges[1], s[0], r_edges[3]])
+
+        self.nodes[self.apex].set_name(f"node {self.apex}")
+        self.nodes[self.apex+1].set_name(f"node {self.apex+1}")
+        self.nodes[self.apex][2].set_name(f"edge {self.apex+2*self.n+1}")
+
         self.apex = self.apex + 1
+
 
     def __move_left_canonical(self):
         """ move canonical apex to right
         """
         if self.apex == 0:
             raise ValueError("can't move canonical apex to left")
-        reshape_dim = self.tensors[self.apex].shape[2]
-        U, s, Vh = np.linalg.svd(self.tensors[self.apex].transpose(2,0,1,3).reshape(reshape_dim, -1), full_matrices=False)
-        self.tensors[self.apex] = Vh.reshape(-1, self.tensors[self.apex].shape[0], self.tensors[self.apex].shape[1], self.tensors[self.apex].shape[3]).transpose(1,2,0,3)
-        self.tensors[self.apex-1] = oe.contract("abcd,de,ef", self.tensors[self.apex-1], U, np.diag(s))
-        self.edge_dims[self.apex+2*self.n] = self.tensors[self.apex].shape[2]
+        l_edges = self.nodes[self.apex-1].get_all_edges()
+        r_edges = self.nodes[self.apex].get_all_edges()
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]])
+        self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], r_edges[1], s[1], r_edges[3]])
+        self.nodes[self.apex-1] = tn.contractors.optimal([self.nodes[self.apex-1], U, s], output_edge_order=[l_edges[0], l_edges[1], l_edges[2], s[1]])
+
+        self.nodes[self.apex].set_name(f"node {self.apex}")
+        self.nodes[self.apex-1].set_name(f"node {self.apex-1}")
+        self.nodes[self.apex][1].set_name(f"edge {self.apex+2*self.n}")
+
         self.apex = self.apex - 1

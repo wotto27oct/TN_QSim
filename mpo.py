@@ -41,7 +41,7 @@ class MPO(TensorNetwork):
 
 
     def canonicalization(self):
-        """canonicalize MPS
+        """canonicalize MPO
         apex point = self.0
 
         """
