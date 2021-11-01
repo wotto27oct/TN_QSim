@@ -70,3 +70,10 @@ class TensorNetwork():
             if r_tensors[i].ndim != self.nodes[tidx].get_rank():
                 raise ValueError("the ndim of replaced tensors do not correspond")
             self.nodes[tidx].set_tensor(r_tensors[i])
+
+    @property
+    def tensors(self):
+        tensor_list = []
+        for node in self.nodes:
+            tensor_list.append(node.tensor)
+        return tensor_list

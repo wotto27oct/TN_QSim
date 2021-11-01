@@ -139,9 +139,9 @@ class MPO(TensorNetwork):
 
             self.nodes[tidx[i]].set_name(f"node {tidx[i]}")
             if is_direction_right:
-                self.nodes[tidx[i]][2].set_name(f"edge {tidx[i]+2*self.n+1}")
+                self.nodes[tidx[i]][3].set_name(f"edge {tidx[i]+2*self.n+1}")
             else:
-                self.nodes[tidx[i]][1].set_name(f"edge {tidx[i]+2*self.n}")
+                self.nodes[tidx[i]][2].set_name(f"edge {tidx[i]+2*self.n}")
             
             fidelity = 1.0 - np.dot(trun_s, trun_s)
             total_fidelity *= fidelity
@@ -231,9 +231,9 @@ class MPO(TensorNetwork):
 
             self.nodes[tidx[i]].set_name(f"node {tidx[i]}")
             if is_direction_right:
-                self.nodes[tidx[i]][2].set_name(f"edge {tidx[i]+2*self.n+1}")
+                self.nodes[tidx[i]][3].set_name(f"edge {tidx[i]+2*self.n+1}")
             else:
-                self.nodes[tidx[i]][1].set_name(f"edge {tidx[i]+2*self.n}")
+                self.nodes[tidx[i]][2].set_name(f"edge {tidx[i]+2*self.n}")
             
             fidelity = 1.0 - np.dot(trun_s, trun_s)
             total_fidelity *= fidelity
@@ -301,7 +301,7 @@ class MPO(TensorNetwork):
 
         self.nodes[self.apex].set_name(f"node {self.apex}")
         self.nodes[self.apex+1].set_name(f"node {self.apex+1}")
-        self.nodes[self.apex][2].set_name(f"edge {self.apex+2*self.n+1}")
+        self.nodes[self.apex][3].set_name(f"edge {self.apex+2*self.n+1}")
 
         self.apex = self.apex + 1
 
@@ -319,6 +319,6 @@ class MPO(TensorNetwork):
 
         self.nodes[self.apex].set_name(f"node {self.apex}")
         self.nodes[self.apex-1].set_name(f"node {self.apex-1}")
-        self.nodes[self.apex][1].set_name(f"edge {self.apex+2*self.n}")
+        self.nodes[self.apex][2].set_name(f"edge {self.apex+2*self.n}")
 
         self.apex = self.apex - 1
