@@ -39,6 +39,7 @@ class MPS(TensorNetwork):
             virtual_dims.append(self.nodes[i].get_dimension(2))
         return virtual_dims
 
+
     def canonicalization(self):
         """canonicalize MPS
         apex point = self.0
@@ -84,7 +85,7 @@ class MPS(TensorNetwork):
             if tidx[1] - tidx[0] == 1:
                 is_direction_right = True
         for i in range(len(tidx)-1):
-            if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and  tidx[i+1] - tidx[i] != -1:
+            if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
                 raise ValueError("gate must be applied in sequential to MPS")
         
         reshape_list = []
