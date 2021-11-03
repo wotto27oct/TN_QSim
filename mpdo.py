@@ -188,7 +188,7 @@ class MPDO(TensorNetwork):
         return total_fidelity
 
     
-    def apply_CPTP(self, tidx, gtensor, full_update=False):
+    def apply_CPTP(self, tidx, gtensor, full_update=False, inner_full_update=False):
         """ apply nqubit gate
         trace-norm optimal truncation is used. full-update is not implemented yet.
         
@@ -202,6 +202,8 @@ class MPDO(TensorNetwork):
 
         if full_update:
             raise ValueError("full-update for MPDO is not implemented yet.")
+        if inner_full_update:
+            raise ValueError("inner-full-update for MPDO is not implemented yet.")
 
         # apexをtidx[0]に合わせる
         if self.apex is not None:
@@ -273,11 +275,17 @@ class MPDO(TensorNetwork):
             
             fidelity = 1.0 - np.dot(trun_s, trun_s)
             total_fidelity *= fidelity
-
         
         U_reshape_edges = [node_edges[len(tidx)-1], node_edges[2*len(tidx)-1], inner_edge, node_edges[-1]] if is_direction_right else [node_edges[len(tidx)-1], node_edges[2*len(tidx)-1], node_edges[-1], inner_edge]
         self.nodes[tidx[-1]] = tmp.reorder_edges(U_reshape_edges)
         self.nodes[tidx[-1]].set_name(f"node {tidx[-1]}")
+
+        # heuristic simple-update for inner dimension
+        shape_list = self.nodes[tidx[-1]].tensor.shape
+        if shape_list[0] * shape_list[2] * shape_list[3] < shape_list[1]:
+            tmp = oe.contract("abcd,ebfg->acdefg", self.nodes[tidx[-1]].tensor, self.nodes[tidx[-1]].tensor.conj())
+            U, s, Vh = np.linalg.svd(tmp.reshape(shape_list[0]*shape_list[2]*shape_list[3], -1), full_matrices=False)
+            self.nodes[tidx[-1]].set_tensor(oe.contract("ab,bc->ac", U, np.diag(np.sqrt(s))).reshape(shape_list[0], -1, shape_list[2], shape_list[3]))
 
         if self.apex is not None:
             self.apex = tidx[-1]
@@ -298,24 +306,24 @@ class MPDO(TensorNetwork):
         np.random.seed(seed)
 
         output = []
-        left_tensor = np.array([1])
+        left_tensor = np.array([1]).reshape(1,1)
         #for i in range(self.n-1):
         #    left_tensor.append(oe.contract("aacd,c->d", self.tensors[i], left_tensor[i]))
-        right_tensor = [np.array([1])]
+        right_tensor = [np.array([1]).reshape(1,1)]
         for i in range(self.n-1, 0, -1):
-            right_tensor.append(oe.contract("aacd,d->c", self.tensors[i], right_tensor[self.n-1-i]))
+            right_tensor.append(oe.contract("abcd,abfg,dg->cf", self.nodes[i].tensor, self.nodes[i].tensor.conj(), right_tensor[self.n-1-i]))
         right_tensor = right_tensor[::-1]
         zero = np.array([1, 0])
         one = np.array([0, 1])
         for i in range(self.n):
-            prob_matrix = oe.contract("abcd,c,d->ab", self.tensors[i], left_tensor, right_tensor[i])
+            prob_matrix = oe.contract("abcd,ebfg,cf,dg->ae", self.nodes[i].tensor, self.nodes[i].tensor.conj(), left_tensor, right_tensor[i])
             rand_val = np.random.uniform()
             if rand_val < prob_matrix[0][0] / np.trace(prob_matrix):
                 output.append(0)
-                left_tensor = oe.contract("abcd,a,b,c->d", self.tensors[i], zero, zero, left_tensor)
+                left_tensor = oe.contract("abcd,ebfg,cf,a,e->dg", self.nodes[i].tensor, self.nodes[i].tensor.conj(), left_tensor, zero.conj(), zero)
             else:
                 output.append(1)
-                left_tensor = oe.contract("abcd,a,b,c->d", self.tensors[i], one, one, left_tensor)
+                left_tensor = oe.contract("abcd,ebfg,cf,a,e->dg", self.nodes[i].tensor, self.nodes[i].tensor.conj(), left_tensor, one.conj(), one)
         
         return np.array(output)
 
