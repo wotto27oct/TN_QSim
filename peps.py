@@ -70,8 +70,6 @@ class PEPS(TensorNetwork):
             one = tn.Node(np.array([1]))
             tn.connect(node[dangling_index], one[0])
             node_list.append(one)
-            #order_list = [i for i in range(dangling_index)] + [i for i in range(dangling_index+1, 5)]
-            #tn.contractors.auto([one, node], output_edge_order=[cp_nodes[w][i] for i in order_list])
 
         for w in range(self.width):
             if cp_nodes[w].get_dimension(1) == 1:
@@ -79,18 +77,15 @@ class PEPS(TensorNetwork):
             else:
                 output_edge_order.append(cp_nodes[w][1])
             if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
-                #tn.flatten_edges([cp_nodes[self.width*(self.height-1)+w][3], cp_nodes[self.width*(self.height-1)+w][2]])
                 clear_dangling(cp_nodes[self.width*(self.height-1)+w], 3)
             else:
                 output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
         for h in range(self.height):
             if cp_nodes[h*self.width].get_dimension(4) == 1:
-                #tn.flatten_edges([cp_nodes[h*self.width][4], cp_nodes[h*self.width][2]])
                 clear_dangling(cp_nodes[h*self.width], 4)
             else:
                 output_edge_order.append(cp_nodes[h*self.width][1])
             if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
-                #tn.flatten_edges([cp_nodes[(h+1)*self.width-1][2], cp_nodes[(h+1)*self.width-1][4]])
                 clear_dangling(cp_nodes[(h+1)*self.width-1], 2)
             else:
                 output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
@@ -99,6 +94,63 @@ class PEPS(TensorNetwork):
             for dangling in cp_nodes[i].get_all_dangling():
                 output_edge_order.append(dangling)
         return tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
+
+
+    def apply_MPO(self, tidx, mpo):
+        """ apply MPO
+        
+        Args:
+            tidx (list of int) : list of qubit index we apply to.
+            mpo (MPO) : MPO tensornetwork.
+        """
+
+        def return_dir(diff):
+            if diff == -self.width:
+                return 1
+            elif diff == 1:
+                return 2
+            elif diff == self.width:
+                return 3
+            elif diff == -1:
+                return 4
+            else:
+                raise ValueError("must be applied sequentially")
+
+        edge_list = []
+        node_list = []
+
+        for i, node in enumerate(mpo.nodes):
+            node_contract_list = [node, self.nodes[tidx[i]]]
+            node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 5)]
+            if i == 0:
+                one = tn.Node(np.array([1]))
+                tn.connect(node[2], one[0])
+                node_contract_list.append(one)
+                if i != mpo.n - 1:
+                    node_edge_list.append(node[3])
+            if i == mpo.n - 1:
+                one = tn.Node(np.array([1]))
+                tn.connect(node[3], one[0])
+                node_contract_list.append(one)
+                if i != 0:
+                    node_edge_list.append(node[2])
+            if i != 0 and i != mpo.n-1:
+                node_edge_list = node_edge_list + [node[2], node[3]]
+            
+            tn.connect(node[1], self.nodes[tidx[i]][0])
+            node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+            edge_list.append(node_edge_list)
+        
+        for i in range(len(tidx)):
+            if i != len(tidx)-1:
+                dir = return_dir(tidx[i+1] - tidx[i]) 
+                edge_list[i][dir] = tn.flatten_edges([edge_list[i][dir], edge_list[i][-1]])
+                edge_list[i+1][(dir+1)%4+1] = edge_list[i][dir]
+            if i != 0 or i != len(tidx)-1:
+                edge_list[i].pop()
+            self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])
+
+
 
     def apply_gate(self, tidx, gtensor):
         """ apply nqubit gate
