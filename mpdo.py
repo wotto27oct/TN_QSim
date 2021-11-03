@@ -289,9 +289,7 @@ class MPDO(TensorNetwork):
 
         if self.apex is not None:
             self.apex = tidx[-1]
-            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
-        else:
-            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(self.calc_trace().flatten()[0])
+        self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(self.calc_trace().flatten()[0])
 
         return total_fidelity
 
