@@ -6,9 +6,10 @@ import opt_einsum as oe
 import cotengra as ctg
 import tensornetwork as tn
 from general_tn import TensorNetwork
+from peps import PEPS
 
-class PEPS(TensorNetwork):
-    """class of PEPS
+class PEPS3D(PEPS):
+    """class of PEPS3D
 
     physical bond: 0, 1, ..., n-1
     vertical virtual bond: n, n+1, ..., n+(height+1)-1, n+(height1), ..., n+(height+1)*width-1
@@ -23,43 +24,6 @@ class PEPS(TensorNetwork):
         truncate_dim (int) : truncation dim of virtual bond, default None
         threthold_err (float) : the err threthold of singular values we keep
     """
-
-    def __init__(self, tensors, height, width, truncate_dim=None, threthold_err=None):
-        self.n = len(tensors)
-        self.height = height
-        self.width = width
-        edge_info = []
-        buff = self.n + (self.height+1)*self.width
-        for h in range(self.height):
-            for w in range(self.width):
-                i = h*self.width + w
-                edge_info.append([i, self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w])
-        super().__init__(edge_info, tensors)
-        self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
-
-
-    @property
-    def vertical_virtual_dims(self):
-        virtual_dims = []
-        for w in range(self.width):
-            w_virtual_dims = [self.nodes[w].get_dimension(1)]
-            for h in range(self.height):
-                w_virtual_dims.append(self.nodes[w+h*self.width].get_dimension(3))
-            virtual_dims.append(w_virtual_dims)
-        return virtual_dims
-
-
-    @property
-    def horizontal_virtual_dims(self):
-        virtual_dims = []
-        for h in range(self.height):
-            h_virtual_dims = [self.nodes[self.width].get_dimension(4)]
-            for w in range(self.width):
-                h_virtual_dims.append(self.nodes[w+h*self.width].get_dimension(2))
-            virtual_dims.append(h_virtual_dims)
-        return virtual_dims
-
 
     def contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -97,14 +61,6 @@ class PEPS(TensorNetwork):
 
     
     def amplitude(self, tensors):
-        """contract amplitude with given product states (typically computational basis)
-
-        Args:
-            output_edge_order (list of tn.Edge) : the order of output edge
-        
-        Returns:
-            np.array: tensor after contraction
-        """
         cp_nodes = tn.replicate_nodes(self.nodes)
         node_list = [node for node in cp_nodes]
         output_edge_order = []
