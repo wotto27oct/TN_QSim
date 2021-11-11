@@ -141,8 +141,46 @@ class PEPS(TensorNetwork):
                 output_edge_order.append(dangling)
         
         #opt = ctg.HyperOptimizer(methods="spinglass")
+        #opt = oe.paths.greedy()
         #return tn.contractors.custom(node_list, output_edge_order=output_edge_order, optimizer=opt).tensor
         return tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
+
+    
+    def test_contract(self):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        node_list = [node for node in cp_nodes]
+        output_edge_order = []
+        # if there are dangling edges which dimension is 1, contract together
+        def clear_dangling(node, dangling_index):
+            one = tn.Node(np.array([1]))
+            tn.connect(node[dangling_index], one[0])
+            node_list.append(one)
+
+        for w in range(self.width):
+            if cp_nodes[w].get_dimension(1) == 1:
+                clear_dangling(cp_nodes[w], 1)
+            else:
+                output_edge_order.append(cp_nodes[w][1])
+            if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
+                clear_dangling(cp_nodes[self.width*(self.height-1)+w], 3)
+            else:
+                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
+        for h in range(self.height):
+            if cp_nodes[h*self.width].get_dimension(4) == 1:
+                clear_dangling(cp_nodes[h*self.width], 4)
+            else:
+                output_edge_order.append(cp_nodes[h*self.width][1])
+            if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
+                clear_dangling(cp_nodes[(h+1)*self.width-1], 2)
+            else:
+                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
+
+        for i in range(self.n):
+            for dangling in cp_nodes[i].get_all_dangling():
+                output_edge_order.append(dangling)
+
+        self.contract_by_oe(node_list)
+        return None
 
 
     def apply_MPO(self, tidx, mpo):
