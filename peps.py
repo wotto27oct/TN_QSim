@@ -61,43 +61,8 @@ class PEPS(TensorNetwork):
         return virtual_dims
 
 
-    def contract(self):
-        cp_nodes = tn.replicate_nodes(self.nodes)
-        node_list = [node for node in cp_nodes]
-        output_edge_order = []
-        # if there are dangling edges which dimension is 1, contract together
-        def clear_dangling(node, dangling_index):
-            one = tn.Node(np.array([1]))
-            tn.connect(node[dangling_index], one[0])
-            node_list.append(one)
-
-        for w in range(self.width):
-            if cp_nodes[w].get_dimension(1) == 1:
-                clear_dangling(cp_nodes[w], 1)
-            else:
-                output_edge_order.append(cp_nodes[w][1])
-            if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
-                clear_dangling(cp_nodes[self.width*(self.height-1)+w], 3)
-            else:
-                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
-        for h in range(self.height):
-            if cp_nodes[h*self.width].get_dimension(4) == 1:
-                clear_dangling(cp_nodes[h*self.width], 4)
-            else:
-                output_edge_order.append(cp_nodes[h*self.width][1])
-            if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
-                clear_dangling(cp_nodes[(h+1)*self.width-1], 2)
-            else:
-                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
-
-        for i in range(self.n):
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
-        return tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
-
-    
-    def amplitude(self, tensors):
-        """contract amplitude with given product states (typically computational basis)
+    def contract(self, algorithm=None, memory_limit=None, visualize=False):
+        """contract whole PEPS and generate full state (+alpha)
 
         Args:
             output_edge_order (list of tn.Edge) : the order of output edge
@@ -106,79 +71,130 @@ class PEPS(TensorNetwork):
             np.array: tensor after contraction
         """
         cp_nodes = tn.replicate_nodes(self.nodes)
-        node_list = [node for node in cp_nodes]
-        output_edge_order = []
-        # if there are dangling edges which dimension is 1, contract together
-        def clear_dangling(node, dangling_index):
-            one = tn.Node(np.array([1]))
-            tn.connect(node[dangling_index], one[0])
-            node_list.append(one)
 
-        for w in range(self.width):
-            if cp_nodes[w].get_dimension(1) == 1:
-                clear_dangling(cp_nodes[w], 1)
-            else:
-                output_edge_order.append(cp_nodes[w][1])
-            if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
-                clear_dangling(cp_nodes[self.width*(self.height-1)+w], 3)
-            else:
-                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
-        for h in range(self.height):
-            if cp_nodes[h*self.width].get_dimension(4) == 1:
-                clear_dangling(cp_nodes[h*self.width], 4)
-            else:
-                output_edge_order.append(cp_nodes[h*self.width][1])
-            if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
-                clear_dangling(cp_nodes[(h+1)*self.width-1], 2)
-            else:
-                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
+        # if there are dangling edges which dimension is 1, contract first
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+
+        node_list = [node for node in cp_nodes]
+
+        for i in range(self.n):
+            for dangling in cp_nodes[i].get_all_dangling():
+                output_edge_order.append(dangling)
+
+        path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        #return tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
+
+    
+    def amplitude(self, tensors, algorithm=None, memory_limit=None, visualize=False):
+        """contract amplitude with given product states (typically computational basis)
+
+        Args:
+            tensor (list of np.array) : the given index represented by the list of tensor
+        
+        Returns:
+            np.array: tensor after contraction
+        """
+        cp_nodes = tn.replicate_nodes(self.nodes)
+
+        # if there are dangling edges which dimension is 1, contract first
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
 
         for i in range(self.n):
             state = tn.Node(tensors[i])
             tn.connect(cp_nodes[i][0], state[0])
-            node_list.append(state)
+            edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
+            cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
+            #node_list.append(state)
             for dangling in cp_nodes[i].get_all_dangling():
                 output_edge_order.append(dangling)
+
+        node_list = [node for node in cp_nodes]
         
         #opt = ctg.HyperOptimizer(methods="spinglass")
         #opt = oe.paths.greedy()
         #return tn.contractors.custom(node_list, output_edge_order=output_edge_order, optimizer=opt).tensor
-        return tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
+        path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        #return tn.contractors.optimal(node_list, output_edge_order=output_edge_order).tensor
 
     
-    def test_contract(self):
-        cp_nodes = tn.replicate_nodes(self.nodes)
-        node_list = [node for node in cp_nodes]
+    def __clear_dangling(self, cp_nodes):
         output_edge_order = []
-        # if there are dangling edges which dimension is 1, contract together
-        def clear_dangling(node, dangling_index):
+        def clear_dangling(node_idx, dangling_index):
             one = tn.Node(np.array([1]))
-            tn.connect(node[dangling_index], one[0])
-            node_list.append(one)
+            tn.connect(cp_nodes[node_idx][dangling_index], one[0])
+            edge_order = []
+            for i in range(len(cp_nodes[node_idx].edges)):
+                if i != dangling_index:
+                    edge_order.append(cp_nodes[node_idx][i])
+            cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
 
-        for w in range(self.width):
-            if cp_nodes[w].get_dimension(1) == 1:
-                clear_dangling(cp_nodes[w], 1)
+        # 4,3,2,1の順に消す
+        for h in range(self.height):
+            if cp_nodes[h*self.width].get_dimension(4) == 1:
+                clear_dangling(h*self.width, 4)
             else:
-                output_edge_order.append(cp_nodes[w][1])
+                output_edge_order.append(cp_nodes[h*self.width][1])
+        for w in range(self.width):
             if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
-                clear_dangling(cp_nodes[self.width*(self.height-1)+w], 3)
+                clear_dangling(self.width*(self.height-1)+w, 3)
             else:
                 output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
         for h in range(self.height):
-            if cp_nodes[h*self.width].get_dimension(4) == 1:
-                clear_dangling(cp_nodes[h*self.width], 4)
-            else:
-                output_edge_order.append(cp_nodes[h*self.width][1])
             if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
-                clear_dangling(cp_nodes[(h+1)*self.width-1], 2)
+                clear_dangling((h+1)*self.width-1, 2)
             else:
                 output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
+        for w in range(self.width):
+            if cp_nodes[w].get_dimension(1) == 1:
+                clear_dangling(w, 1)
+            else:
+                output_edge_order.append(cp_nodes[w][1])
+
+        return cp_nodes, output_edge_order
+
+    def test_contract(self):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        output_edge_order = []
+        # if there are dangling edges which dimension is 1, contract together
+        def clear_dangling(node_idx, dangling_index):
+            one = tn.Node(np.array([1]))
+            edge = tn.connect(cp_nodes[node_idx][dangling_index], one[0])
+            output_edge_order = []
+            for i in range(len(cp_nodes[node_idx].edges)):
+                if i != dangling_index:
+                    output_edge_order.append(cp_nodes[node_idx][i])
+            cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], output_edge_order)
+            #node_list.append(one)
+
+        # 4,3,2,1の順に消す
+        for h in range(self.height):
+            if cp_nodes[h*self.width].get_dimension(4) == 1:
+                clear_dangling(h*self.width, 4)
+            else:
+                output_edge_order.append(cp_nodes[h*self.width][1])
+        for w in range(self.width):
+            if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
+                clear_dangling(self.width*(self.height-1)+w, 3)
+            else:
+                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
+        for h in range(self.height):
+            if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
+                clear_dangling((h+1)*self.width-1, 2)
+            else:
+                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
+        for w in range(self.width):
+            if cp_nodes[w].get_dimension(1) == 1:
+                clear_dangling(w, 1)
+            else:
+                output_edge_order.append(cp_nodes[w][1])
 
         for i in range(self.n):
             for dangling in cp_nodes[i].get_all_dangling():
                 output_edge_order.append(dangling)
 
+        node_list = [node for node in cp_nodes]
         self.contract_by_oe(node_list)
         return None
 
