@@ -183,7 +183,7 @@ class TensorNetwork():
            
         if visualize: 
             print(f"path: {path}")
-            print(edge_alpha_dims)
+            print("edge_dims:", edge_alpha_dims)
             for i in range(len(path)):
                 print(f"{i}: {einsum_str_list[i]}")
                 print(f"contract {contract_einsum_str_list[i]} cost:{cost_list[i]} sp_cost:{sp_cost_list[i]}")

@@ -5,6 +5,8 @@ from numpy.core.fromnumeric import _reshape_dispatcher
 import opt_einsum as oe
 import cotengra as ctg
 import tensornetwork as tn
+from mpo import MPO
+from mps import MPS
 from general_tn import TensorNetwork
 
 class PEPS(TensorNetwork):
@@ -24,7 +26,7 @@ class PEPS(TensorNetwork):
         threthold_err (float) : the err threthold of singular values we keep
     """
 
-    def __init__(self, tensors, height, width, truncate_dim=None, threthold_err=None):
+    def __init__(self, tensors, height, width, truncate_dim=None, threthold_err=None, bmps_truncate_dim=None):
         self.n = len(tensors)
         self.height = height
         self.width = width
@@ -38,6 +40,7 @@ class PEPS(TensorNetwork):
         super().__init__(edge_info, tensors)
         self.truncate_dim = truncate_dim
         self.threthold_err = threthold_err
+        self.bmps_truncate_dim = bmps_truncate_dim
 
 
     @property
@@ -88,6 +91,62 @@ class PEPS(TensorNetwork):
         return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
 
     
+    def amplitude_BMPS(self, tensors):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+
+        # if there are dangling edges which dimension is 1, contract first
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+
+        # contract product state first
+        for i in range(self.n):
+            state = tn.Node(tensors[i])
+            tn.connect(cp_nodes[i][0], state[0])
+            edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
+            cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
+
+        # suppose the dimension of down below is 1
+        mps_node = []
+        for w in range(self.width):
+            tensor = cp_nodes[(self.height-1)*self.width+w].tensor
+            shape = tensor.shape
+            if w == 0:
+                mps_node.append(tensor.reshape(shape[0], 1, shape[1]))
+            elif w == self.width - 1:
+                mps_node.append(tensor.reshape(shape[0], shape[1], 1))
+            else:
+                mps_node.append(tensor.reshape(shape[0], shape[1], shape[2]).transpose(0,2,1))
+
+        mps = MPS(mps_node, truncate_dim=self.bmps_truncate_dim)
+        mps.canonicalization()
+        #print(f"mps at {self.height-1}th layer:", mps.virtual_dims)
+        
+        total_fid = 1.0
+
+        for h in range(self.height-2, -1, -1):
+            mpo_node = []
+            for w in range(self.width):
+                tensor = cp_nodes[h*self.width+w].tensor
+                shape = tensor.shape
+                if h != 0:
+                    if w == 0:
+                        tensor = tensor.reshape(shape[0], shape[1], shape[2], 1)
+                    elif w == self.width - 1:
+                        tensor = tensor.reshape(shape[0], 1, shape[1], shape[2])
+                elif h == 0:
+                    if w == 0:
+                        tensor = tensor.reshape(1, shape[0], shape[1], 1)
+                    elif w == self.width - 1:
+                        tensor = tensor.reshape(1, 1, shape[0], shape[1])
+                    else:
+                        tensor = tensor.reshape(1, shape[0], shape[1], shape[2])
+                mpo_node.append(tensor.transpose(0,2,3,1))
+            mpo = MPO(mpo_node)
+            fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            total_fid = total_fid * fid
+            
+        return mps.contract().flatten()[0]
+
+    
     def amplitude(self, tensors, algorithm=None, memory_limit=None, path=None, visualize=False):
         """contract amplitude with given product states (typically computational basis)
 
@@ -115,8 +174,8 @@ class PEPS(TensorNetwork):
         
         if path == None:
             path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor, path
-
+        self.path = path
+        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
     
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []
@@ -299,34 +358,3 @@ class PEPS(TensorNetwork):
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
-
-        """for i, node in enumerate(mpo.nodes):
-            node_contract_list = [node, self.nodes[tidx[i]]]
-            node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 5)]
-            if i == 0:
-                one = tn.Node(np.array([1]))
-                tn.connect(node[2], one[0])
-                node_contract_list.append(one)
-                if i != mpo.n - 1:
-                    node_edge_list.append(node[3])
-            if i == mpo.n - 1:
-                one = tn.Node(np.array([1]))
-                tn.connect(node[3], one[0])
-                node_contract_list.append(one)
-                if i != 0:
-                    node_edge_list.append(node[2])
-            if i != 0 and i != mpo.n-1:
-                node_edge_list = node_edge_list + [node[2], node[3]]
-            
-            tn.connect(node[1], self.nodes[tidx[i]][0])
-            node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
-            edge_list.append(node_edge_list)
-        
-        for i in range(len(tidx)):
-            if i != len(tidx)-1:
-                dir = return_dir(tidx[i+1] - tidx[i]) 
-                edge_list[i][dir] = tn.flatten_edges([edge_list[i][dir], edge_list[i][-1]])
-                edge_list[i+1][(dir+1)%4+1] = edge_list[i][dir]
-            if i != 0 or i != len(tidx)-1:
-                edge_list[i].pop()
-            self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])"""

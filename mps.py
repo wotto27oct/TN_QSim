@@ -142,9 +142,115 @@ class MPS(TensorNetwork):
 
         if self.apex is not None:
             self.apex = tidx[-1]
+        
+        self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
+        
+        return total_fidelity
+
+
+    def apply_MPO(self, tidx, mpo, is_normalize=True):
+        """ apply MPO
+
+        Args:
+            tidx (list of int) : list of qubit index we apply to.
+            mpo (MPO) : MPO tensornetwork.
+        """
+
+        # apexをtidx[0]に合わせる
+        if self.apex is not None:
+            if tidx[0] < self.apex:
+                for _ in range(self.apex - tidx[0]):
+                    self.__move_left_canonical()
+            elif tidx[0] > self.apex:
+                for _ in range(tidx[0] - self.apex):
+                    self.__move_right_canonical()
+    
+        is_direction_right = False
+        if len(tidx) == 1:
+            is_direction_right = True
+        else:
+            if tidx[1] - tidx[0] == 1:
+                is_direction_right = True
+        for i in range(len(tidx)-1):
+            if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
+                raise ValueError("gate must be applied in sequential to MPS")
+        
+        dir = 2 if is_direction_right else 1
+
+        total_fidelity = 1.0
+            
+        edge_list = []
+        node_list = []
+        if len(tidx) == 1:
+            node = mpo.nodes[0]
+            node_contract_list = [node, self.nodes[tidx[0]]]
+            node_edge_list = [node[0]] + [self.nodes[tidx[0]][j] for j in range(1, 3)]
+            one = tn.Node(np.array([1]))
+            tn.connect(node[2], one[0])
+            node_contract_list.append(one)
+            one2 = tn.Node(np.array([1]))
+            tn.connect(node[3], one2[0])
+            node_contract_list.append(one2)
+            tn.connect(node[1], self.nodes[tidx[0]][0])
+            node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+        else:
+            for i, node in enumerate(mpo.nodes):
+                if i == 0:
+                    node_contract_list = [node, self.nodes[tidx[i]]]
+                    node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 3)] + [node[3]]
+                    one = tn.Node(np.array([1]))
+                    tn.connect(node[2], one[0])
+                    node_contract_list.append(one)
+                    tn.connect(node[1], self.nodes[tidx[i]][0])
+                    node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+                    edge_list.append(node_edge_list)
+                else:
+                    tn.connect(node[1], self.nodes[tidx[i]][0])
+                    l_l_edges = [node_list[i-1][j] for j in range(0, 3) if j != dir]
+                    l_r_edges = [node_list[i-1][dir]] + [node_list[i-1][3]]
+                    lU, ls, lVh, _ = tn.split_node_full_svd(node_list[i-1], l_l_edges, l_r_edges)
+                    lU = lU.reorder_edges(l_l_edges + [ls[0]])
+                    lVh = lVh.reorder_edges(l_r_edges + [ls[1]])
+                    r_l_edges = [self.nodes[tidx[i]][0]] + [self.nodes[tidx[i]][(dir%2)+1]]
+                    r_r_edges = [self.nodes[tidx[i]][dir]]
+                    rU, rs, rVh, _ = tn.split_node_full_svd(self.nodes[tidx[i]], r_l_edges, r_r_edges)
+                    rU = rU.reorder_edges(r_l_edges + [rs[0]])
+                    rVh = rVh.reorder_edges(r_r_edges + [rs[1]])
+                    svd_node_edge_list = None
+                    svd_node_list = [ls, lVh, rU, rs, node]
+                    if i == mpo.n - 1:
+                        one = tn.Node(np.array([1]))
+                        tn.connect(node[3], one[0])
+                        svd_node_edge_list = [ls[0], node[0], rs[1]]
+                        svd_node_list.append(one)
+                    else:
+                        svd_node_edge_list = [ls[0], node[0], node[3], rs[1]]
+                    svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
+                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+                    trun_s_sq = np.dot(trun_s, trun_s)
+                    fidelity = s_sq / (s_sq + trun_s_sq)
+                    total_fidelity *= fidelity
+                    l_edge_order = [lU.edges[i] for i in range(0, dir)] + [s[0]] + [lU.edges[i] for i in range(dir, 2)]
+                    node_list[i-1] = tn.contractors.optimal([lU, U], output_edge_order=l_edge_order)
+                    if i == mpo.n - 1:
+                        r_edge_order = [Vh[1]] + [rVh.edges[i] for i in range(0, (dir%2))] + [s[0]] + [rVh.edges[i] for i in range(0, (dir+1)%2)]
+                        node_list.append(tn.contractors.optimal([s, Vh, rVh], output_edge_order=r_edge_order))
+                    else:
+                        r_edge_order = [Vh[1]] + [rVh.edges[i] for i in range(0, (dir%2))] + [s[0]] + [rVh.edges[i] for i in range(0, (dir+1)%2)] + [Vh[2]]
+                        node_list.append(tn.contractors.optimal([s, Vh, rVh], output_edge_order=r_edge_order))
+
+        for i in range(len(tidx)):
+            self.nodes[tidx[i]] = node_list[i]
+
+        if self.apex is not None:
+            self.apex = tidx[-1]
+        
+        if is_normalize:
             self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
         
         return total_fidelity
+
 
     def sample(self, seed=0):
         """ sample from mps
