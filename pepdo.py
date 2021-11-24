@@ -9,16 +9,17 @@ from mpo import MPO
 from mps import MPS
 from general_tn import TensorNetwork
 
-class PEPS(TensorNetwork):
-    """class of PEPS
+class PEPDO(TensorNetwork):
+    """class of PEPDO
 
     physical bond: 0, 1, ..., n-1
-    vertical virtual bond: n, n+1, ..., n+(height+1)-1, n+(height1), ..., n+(height+1)*width-1
-    horizontal virtual bond: n+(height+1)*width, ..., n+(height+1)*width+(width+1)-1, ..., n + (height+1)*height + (height+1)*width-1
+    inner bond: n, n+1, ..., 2n-1
+    vertical virtual bond: 2n, 2n+1, ..., 2n+(height+1)-1, 2n+(height1), ..., 2n+(height+1)*width-1
+    horizontal virtual bond: 2n+(height+1)*width, ..., 2n+(height+1)*width+(width+1)-1, ..., 2n+(height+1)*height+(height+1)*width-1
 
     Attributes:
-        width (int) : PEPS width
-        height (int) : PEPS height
+        width (int) : PEPDO width
+        height (int) : PEPDO height
         n (int) : the number of tensors
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
@@ -32,11 +33,11 @@ class PEPS(TensorNetwork):
         self.width = width
         self.path = None
         edge_info = []
-        buff = self.n + (self.height+1)*self.width
+        buff =2*self.n + (self.height+1)*self.width
         for h in range(self.height):
             for w in range(self.width):
                 i = h*self.width + w
-                edge_info.append([i, self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w])
+                edge_info.append([i, 2*self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, 2*self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w, i+self.n])
         super().__init__(edge_info, tensors)
         self.truncate_dim = truncate_dim
         self.threthold_err = threthold_err
@@ -66,7 +67,7 @@ class PEPS(TensorNetwork):
 
 
     def contract(self, algorithm=None, memory_limit=None, path=None, visualize=False):
-        """contract whole PEPS and generate full state (+alpha)
+        """contract PEPDO and generate full density operator
 
         Args:
             output_edge_order (list of tn.Edge) : the order of output edge
@@ -75,13 +76,18 @@ class PEPS(TensorNetwork):
             np.array: tensor after contraction
         """
         cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            if cp_nodes[i].get_dimension(5) != 1:
+                tn.connect(cp_nodes[i][5], cp_nodes[i+self.n][5])
 
-        # if there are dangling edges which dimension is 1, contract first
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
         cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
 
         node_list = [node for node in cp_nodes]
 
-        for i in range(self.n):
+        for i in range(2*self.n):
             for dangling in cp_nodes[i].get_all_dangling():
                 output_edge_order.append(dangling)
 
@@ -142,7 +148,7 @@ class PEPS(TensorNetwork):
                 mpo_node.append(tensor.transpose(0,2,3,1))
             mpo = MPO(mpo_node)
             fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
-            # print("bmps mps-dim", mps.virtual_dims)
+            print("bmps mps-dim", mps.virtual_dims)
             total_fid = total_fid * fid
             
         return mps.contract().flatten()[0]
@@ -189,7 +195,11 @@ class PEPS(TensorNetwork):
                     edge_order.append(cp_nodes[node_idx][i])
             cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
 
-        # 4,3,2,1の順に消す
+        # 5,4,3,2,1の順に消す
+        for i in range(self.n):
+            if cp_nodes[i].get_dimension(5) == 1:
+                clear_dangling(i, 5)
+                clear_dangling(i+self.n, 5)
         for h in range(self.height):
             if cp_nodes[h*self.width].get_dimension(4) == 1:
                 clear_dangling(h*self.width, 4)
