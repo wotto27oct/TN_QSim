@@ -142,7 +142,7 @@ class PEPS(TensorNetwork):
                 mpo_node.append(tensor.transpose(0,2,3,1))
             mpo = MPO(mpo_node)
             fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
-            # print("bmps mps-dim", mps.virtual_dims)
+            #print("bmps mps-dim", mps.virtual_dims)
             total_fid = total_fid * fid
             
         return mps.contract().flatten()[0]
