@@ -124,15 +124,14 @@ class MPDO(TensorNetwork):
         if len(tidx) == 1:
             node = mpo.nodes[0]
             node_contract_list = [node, self.nodes[tidx[0]]]
-            node_edge_list = [node[0]] + [self.nodes[tidx[0]][j] for j in range(1, 4)]
+            node_edge_list = [node[0]] + [self.nodes[tidx[0]][j] for j in range(1, 4)] + [node[3]]
             one = tn.Node(np.array([1]))
             tn.connect(node[2], one[0])
             node_contract_list.append(one)
-            one2 = tn.Node(np.array([1]))
-            tn.connect(node[3], one2[0])
-            node_contract_list.append(one2)
             tn.connect(node[1], self.nodes[tidx[0]][0])
-            node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+            new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+            tn.flatten_edges([new_node[3], new_node[4]])
+            node_list.append(new_node)
         else:
             for i, node in enumerate(mpo.nodes):
                 if i == 0:
