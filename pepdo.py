@@ -66,6 +66,14 @@ class PEPDO(TensorNetwork):
         return virtual_dims
 
 
+    @property
+    def inner_dims(self):
+        inner_dims = []
+        for i in range(self.n):
+            inner_dims.append(self.nodes[i].get_dimension(5))
+        return inner_dims
+
+
     def contract(self, algorithm=None, memory_limit=None, path=None, visualize=False):
         """contract PEPDO and generate full density operator
 
@@ -90,6 +98,35 @@ class PEPDO(TensorNetwork):
         for i in range(2*self.n):
             for dangling in cp_nodes[i].get_all_dangling():
                 output_edge_order.append(dangling)
+
+        if path == None:
+            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        self.path = path
+        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+
+    
+    def calc_trace(self, algorithm=None, memory_limit=None, path=None, visualize=False):
+        """contract all PEPDO and generate trace of full density operator
+        
+        Returns:
+            np.array: tensor after contraction
+        """
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            if cp_nodes[i].get_dimension(5) != 1:
+                tn.connect(cp_nodes[i][5], cp_nodes[i+self.n][5])
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+        node_list = [node for node in cp_nodes]
+
+        """for i in range(2*self.n):
+            for dangling in cp_nodes[i].get_all_dangling():
+                print(i, dangling)
+                output_edge_order.append(dangling)"""
 
         if path == None:
             path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
@@ -200,26 +237,28 @@ class PEPDO(TensorNetwork):
             if cp_nodes[i].get_dimension(5) == 1:
                 clear_dangling(i, 5)
                 clear_dangling(i+self.n, 5)
-        for h in range(self.height):
-            if cp_nodes[h*self.width].get_dimension(4) == 1:
-                clear_dangling(h*self.width, 4)
-            else:
-                output_edge_order.append(cp_nodes[h*self.width][1])
-        for w in range(self.width):
-            if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
-                clear_dangling(self.width*(self.height-1)+w, 3)
-            else:
-                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
-        for h in range(self.height):
-            if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
-                clear_dangling((h+1)*self.width-1, 2)
-            else:
-                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
-        for w in range(self.width):
-            if cp_nodes[w].get_dimension(1) == 1:
-                clear_dangling(w, 1)
-            else:
-                output_edge_order.append(cp_nodes[w][1])
+        # 表，裏
+        for i in range(2):
+            for h in range(self.height):
+                if cp_nodes[i*self.n+h*self.width].get_dimension(4) == 1:
+                    clear_dangling(i*self.n+h*self.width, 4)
+                else:
+                    output_edge_order.append(cp_nodes[i*self.n+h*self.width][4])
+            for w in range(self.width):
+                if cp_nodes[i*self.n+self.width*(self.height-1)+w].get_dimension(3) == 1:
+                    clear_dangling(i*self.n+self.width*(self.height-1)+w, 3)
+                else:
+                    output_edge_order.append(cp_nodes[i*self.n+self.width*(self.height-1)+w][3])
+            for h in range(self.height):
+                if cp_nodes[i*self.n+(h+1)*self.width-1].get_dimension(2) == 1:
+                    clear_dangling(i*self.n+(h+1)*self.width-1, 2)
+                else:
+                    output_edge_order.append(cp_nodes[i*self.n+(h+1)*self.width-1][2])
+            for w in range(self.width):
+                if cp_nodes[i*self.n+w].get_dimension(1) == 1:
+                    clear_dangling(i*self.n+w, 1)
+                else:
+                    output_edge_order.append(cp_nodes[i*self.n+w][1])
 
         return cp_nodes, output_edge_order
 
