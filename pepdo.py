@@ -96,8 +96,8 @@ class PEPDO(TensorNetwork):
         node_list = [node for node in cp_nodes]
 
         for i in range(2*self.n):
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
+            output_edge_order.append(cp_nodes[i][0])
+
 
         if path == None:
             path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
