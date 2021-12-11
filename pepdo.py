@@ -8,6 +8,7 @@ import tensornetwork as tn
 from mpo import MPO
 from mps import MPS
 from general_tn import TensorNetwork
+from cotengra.core import ContractionTree
 
 class PEPDO(TensorNetwork):
     """class of PEPDO
@@ -42,6 +43,7 @@ class PEPDO(TensorNetwork):
         self.truncate_dim = truncate_dim
         self.threthold_err = threthold_err
         self.bmps_truncate_dim = bmps_truncate_dim
+        self.tree, self.trace_tree = None, None
 
 
     @property
@@ -74,7 +76,7 @@ class PEPDO(TensorNetwork):
         return inner_dims
 
 
-    def contract(self, algorithm=None, memory_limit=None, path=None, visualize=False):
+    def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
         """contract PEPDO and generate full density operator
 
         Args:
@@ -98,19 +100,16 @@ class PEPDO(TensorNetwork):
         for i in range(2*self.n):
             output_edge_order.append(cp_nodes[i][0])
 
+        #if tree == None and path == None:
+        #    tree, _, _  = self.find_contract_tree(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        #    self.tree = tree
+        
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
-        if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
 
     
-    def calc_trace(self, algorithm=None, memory_limit=None, path=None, visualize=False):
-        """contract all PEPDO and generate trace of full density operator
-        
-        Returns:
-            np.array: tensor after contraction
-        """
+    def prepare_trace(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
         cp_nodes.extend(tn.replicate_nodes(self.nodes))
         for i in range(self.n):
@@ -123,103 +122,46 @@ class PEPDO(TensorNetwork):
         cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
         node_list = [node for node in cp_nodes]
 
-        """for i in range(2*self.n):
-            for dangling in cp_nodes[i].get_all_dangling():
-                print(i, dangling)
-                output_edge_order.append(dangling)"""
-
-        if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        return node_list, output_edge_order
 
     
-    def amplitude_BMPS(self, tensors):
-        cp_nodes = tn.replicate_nodes(self.nodes)
-
-        # if there are dangling edges which dimension is 1, contract first
-        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
-
-        # contract product state first
-        for i in range(self.n):
-            state = tn.Node(tensors[i])
-            tn.connect(cp_nodes[i][0], state[0])
-            edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
-            cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
-
-        # suppose the dimension of down below is 1
-        mps_node = []
-        for w in range(self.width):
-            tensor = cp_nodes[(self.height-1)*self.width+w].tensor
-            shape = tensor.shape
-            if w == 0:
-                mps_node.append(tensor.reshape(shape[0], 1, shape[1]))
-            elif w == self.width - 1:
-                mps_node.append(tensor.reshape(shape[0], shape[1], 1))
-            else:
-                mps_node.append(tensor.reshape(shape[0], shape[1], shape[2]).transpose(0,2,1))
-
-        mps = MPS(mps_node, truncate_dim=self.bmps_truncate_dim)
-        mps.canonicalization()
-        #print(f"mps at {self.height-1}th layer:", mps.virtual_dims)
-        
-        total_fid = 1.0
-
-        for h in range(self.height-2, -1, -1):
-            mpo_node = []
-            for w in range(self.width):
-                tensor = cp_nodes[h*self.width+w].tensor
-                shape = tensor.shape
-                if h != 0:
-                    if w == 0:
-                        tensor = tensor.reshape(shape[0], shape[1], shape[2], 1)
-                    elif w == self.width - 1:
-                        tensor = tensor.reshape(shape[0], 1, shape[1], shape[2])
-                elif h == 0:
-                    if w == 0:
-                        tensor = tensor.reshape(1, shape[0], shape[1], 1)
-                    elif w == self.width - 1:
-                        tensor = tensor.reshape(1, 1, shape[0], shape[1])
-                    else:
-                        tensor = tensor.reshape(1, shape[0], shape[1], shape[2])
-                mpo_node.append(tensor.transpose(0,2,3,1))
-            mpo = MPO(mpo_node)
-            fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
-            print("bmps mps-dim", mps.virtual_dims)
-            total_fid = total_fid * fid
-            
-        return mps.contract().flatten()[0]
-
-    
-    def amplitude(self, tensors, algorithm=None, memory_limit=None, path=None, visualize=False):
-        """contract amplitude with given product states (typically computational basis)
-
-        Args:
-            tensor (list of np.array) : the given index represented by the list of tensor
+    def calc_trace(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """contract all PEPDO and generate trace of full density operator
         
         Returns:
             np.array: tensor after contraction
         """
-        cp_nodes = tn.replicate_nodes(self.nodes)
-
-        # if there are dangling edges which dimension is 1, contract first
-        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
-
-        # contract product state first
-        for i in range(self.n):
-            state = tn.Node(tensors[i])
-            tn.connect(cp_nodes[i][0], state[0])
-            edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
-            cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
-
-        node_list = [node for node in cp_nodes]
         
-        if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        node_list, output_edge_order = self.prepare_trace()
+
+        """if tree == None and path == None:
+            if self.trace_tree is not None:
+                tree = self.trace_tree
+            else:
+                tree, _, _= self.find_contract_tree(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+                self.trace_tree = tree"""
+        
+        if tree == None and path == None and self.trace_tree is not None:
+            tree = self.trace_tree
+        
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+
+
+    def find_trace_tree(self, algorithm=None, memory_limit=None, visualize=False):
+        """find contraction path of trace
+        
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_trace()
+
+        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
+        self.trace_tree = tree
+        return tree, total_cost, max_sp_cost
+
     
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []

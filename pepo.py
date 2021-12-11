@@ -42,6 +42,7 @@ class PEPO(TensorNetwork):
         self.truncate_dim = truncate_dim
         self.threthold_err = threthold_err
         self.bmps_truncate_dim = bmps_truncate_dim
+        self.tree, self.trace_tree, self.pepo_trace_tree = None, None, None
 
 
     @property
@@ -74,8 +75,8 @@ class PEPO(TensorNetwork):
         return inner_dims
 
 
-    def contract(self, algorithm=None, memory_limit=None, path=None, visualize=False):
-        """contract PEPDO and generate full density operator
+    def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """contract PEPO and generate full density operator
 
         Args:
             output_edge_order (list of tn.Edge) : the order of output edge
@@ -84,58 +85,90 @@ class PEPO(TensorNetwork):
             np.array: tensor after contraction
         """
         cp_nodes = tn.replicate_nodes(self.nodes)
-        cp_nodes.extend(tn.replicate_nodes(self.nodes))
-        for i in range(self.n):
-            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
-            if cp_nodes[i].get_dimension(5) != 1:
-                tn.connect(cp_nodes[i][5], cp_nodes[i+self.n][5])
 
         # if there are dangling edges which dimension is 1, contract first (including inner dim)
         cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
 
-        node_list = [node for node in cp_nodes]
-
-        for i in range(2*self.n):
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
-
-        if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
-
-    
-    def calc_trace(self, algorithm=None, memory_limit=None, path=None, visualize=False):
-        """contract all PEPDO and generate trace of full density operator
-        
-        Returns:
-            np.array: tensor after contraction
-        """
-        cp_nodes = tn.replicate_nodes(self.nodes)
-        cp_nodes.extend(tn.replicate_nodes(self.nodes))
         for i in range(self.n):
-            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
-            if cp_nodes[i].get_dimension(5) != 1:
-                tn.connect(cp_nodes[i][5], cp_nodes[i+self.n][5])
-            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
-
-        # if there are dangling edges which dimension is 1, contract first (including inner dim)
-        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+            output_edge_order.append(cp_nodes[i][0])
+        for i in range(self.n):
+            output_edge_order.append(cp_nodes[i][1])
+            
         node_list = [node for node in cp_nodes]
 
         """for i in range(2*self.n):
             for dangling in cp_nodes[i].get_all_dangling():
-                print(i, dangling)
-                output_edge_order.append(dangling)"""
+                output_edge_order.append(dangling)
 
         if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+            path, total_cost, _ = self.find_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
         self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor"""
+
+        #if tree == None and path == None:
+        #    tree, _, _  = self.find_contract_tree(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        #    self.tree = tree
+
+        if tree == None and path == None and self.tree is not None:
+            tree = self.tree
+
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+        
+        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+
+    
+    def prepare_trace(self):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+
+        node_list = []
+        for i in range(self.n):
+            tn.connect(cp_nodes[i][0], cp_nodes[i][1])
+            node = tn.network_operations.contract_trace_edges(cp_nodes[i])
+            node_list.append(node)
+
+        return node_list, output_edge_order
+
+    
+    def calc_trace(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """contract all PEPO and generate trace of full density operator
+        
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        node_list, output_edge_order = self.prepare_trace()
+
+        """if path == None:
+            path, total_cost, _ = self.find_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        self.path = path
+        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor"""
+        
+        if tree == None and path == None and self.trace_tree is not None:
+            tree = self.trace_tree
+
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)    
 
 
-    def calc_pepo_trace(self, pepo, algorithm=None, memory_limit=None, path=None, visualize=False):
-        """contract all PEPDO and generate trace of full density operator
+    def find_trace_path(self, algorithm=None, memory_limit=None, visualize=False):
+        """find contraction path of trace
+        
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+        node_list, output_edge_order = self.prepare_trace()
+
+        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
+        self.trace_tree = tree
+        return tree, total_cost, max_sp_cost
+
+
+    def calc_pepo_trace(self, pepo, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """ calc inner-product and generate trace of full density operator
         
         Returns:
             np.array: tensor after contraction
@@ -152,11 +185,16 @@ class PEPO(TensorNetwork):
         cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
         node_list = [node for node in cp_nodes]
 
-        if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
-    
+        #if path == None:
+        #    path, total_cost = self.find_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        #self.path = path
+        if tree == None and path == None and self.pepo_trace_tree is not None:
+            tree = self.pepo_trace_tree
+        
+        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+
+
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []
         def clear_dangling(node_idx, dangling_index):
@@ -170,37 +208,34 @@ class PEPO(TensorNetwork):
 
         # 5,4,3,2,1,0の順に消す
         # 表，裏
-        for i in range(2):
-            for h in range(self.height):
-                if cp_nodes[i*self.n+h*self.width].get_dimension(5) == 1:
-                    clear_dangling(i*self.n+h*self.width, 5)
-                else:
-                    output_edge_order.append(cp_nodes[i*self.n+h*self.width][5])
-            for w in range(self.width):
-                if cp_nodes[i*self.n+self.width*(self.height-1)+w].get_dimension(4) == 1:
-                    clear_dangling(i*self.n+self.width*(self.height-1)+w, 4)
-                else:
-                    output_edge_order.append(cp_nodes[i*self.n+self.width*(self.height-1)+w][4])
-            for h in range(self.height):
-                if cp_nodes[i*self.n+(h+1)*self.width-1].get_dimension(3) == 1:
-                    clear_dangling(i*self.n+(h+1)*self.width-1, 3)
-                else:
-                    output_edge_order.append(cp_nodes[i*self.n+(h+1)*self.width-1][3])
-            for w in range(self.width):
-                if cp_nodes[i*self.n+w].get_dimension(2) == 1:
-                    clear_dangling(i*self.n+w, 2)
-                else:
-                    output_edge_order.append(cp_nodes[i*self.n+w][2])
+        for h in range(self.height):
+            if cp_nodes[h*self.width].get_dimension(5) == 1:
+                clear_dangling(h*self.width, 5)
+            else:
+                output_edge_order.append(cp_nodes[h*self.width][5])
+        for w in range(self.width):
+            if cp_nodes[self.width*(self.height-1)+w].get_dimension(4) == 1:
+                clear_dangling(self.width*(self.height-1)+w, 4)
+            else:
+                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][4])
+        for h in range(self.height):
+            if cp_nodes[(h+1)*self.width-1].get_dimension(3) == 1:
+                clear_dangling((h+1)*self.width-1, 3)
+            else:
+                output_edge_order.append(cp_nodes[(h+1)*self.width-1][3])
+        for w in range(self.width):
+            if cp_nodes[w].get_dimension(2) == 1:
+                clear_dangling(w, 2)
+            else:
+                output_edge_order.append(cp_nodes[w][2])
 
         # conj-physical, physical
         for i in range(self.n):
             if cp_nodes[i].get_dimension(1) == 1:
                 clear_dangling(i, 1)
-                clear_dangling(i+self.n, 1)
         
         for i in range(self.n):
             if cp_nodes[i].get_dimension(0) == 1:
                 clear_dangling(i, 0)
-                clear_dangling(i+self.n, 0)
 
         return cp_nodes, output_edge_order

@@ -51,6 +51,12 @@ class MPS(TensorNetwork):
         for i in range(self.n-1):
             self.__move_left_canonical()
 
+    def set_apex(self, apex):
+        self.canonicalization()
+        for i in range(apex):
+            self.__move_right_canonical()
+
+
     def contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
         output_edge_order = [cp_nodes[0][1], cp_nodes[self.n-1][2]]
