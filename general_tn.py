@@ -240,7 +240,7 @@ class TensorNetwork():
 
         arrays = [node.tensor for node in node_list]
 
-        if xla_bridge.get_backend().platform == "gpu" or tree.total_flops() > 1e10:
+        if tree.total_flops() > 1e10:
             pool = ThreadPoolExecutor(1)
 
             contract_core_jit = jax.jit(tree.contract_core)
