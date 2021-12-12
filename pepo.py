@@ -49,9 +49,9 @@ class PEPO(TensorNetwork):
     def vertical_virtual_dims(self):
         virtual_dims = []
         for w in range(self.width):
-            w_virtual_dims = [self.nodes[w].get_dimension(1)]
+            w_virtual_dims = [self.nodes[w].get_dimension(2)]
             for h in range(self.height):
-                w_virtual_dims.append(self.nodes[w+h*self.width].get_dimension(3))
+                w_virtual_dims.append(self.nodes[w+h*self.width].get_dimension(4))
             virtual_dims.append(w_virtual_dims)
         return virtual_dims
 
@@ -60,9 +60,9 @@ class PEPO(TensorNetwork):
     def horizontal_virtual_dims(self):
         virtual_dims = []
         for h in range(self.height):
-            h_virtual_dims = [self.nodes[self.width].get_dimension(4)]
+            h_virtual_dims = [self.nodes[self.width].get_dimension(5)]
             for w in range(self.width):
-                h_virtual_dims.append(self.nodes[w+h*self.width].get_dimension(2))
+                h_virtual_dims.append(self.nodes[w+h*self.width].get_dimension(3))
             virtual_dims.append(h_virtual_dims)
         return virtual_dims
 
@@ -182,7 +182,10 @@ class PEPO(TensorNetwork):
                 tn.connect(cp_nodes[i][1], cp_nodes[i+self.n][1])
 
         # if there are dangling edges which dimension is 1, contract first (including inner dim)
-        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+        cp_nodes1, output_edge_order1 = self.__clear_dangling(cp_nodes[:self.n])
+        cp_nodes2, output_edge_order2 = self.__clear_dangling(cp_nodes[self.n:])
+        cp_nodes = cp_nodes1 + cp_nodes2
+        output_edge_order = output_edge_order1 + output_edge_order2
         node_list = [node for node in cp_nodes]
 
         #if path == None:
@@ -196,6 +199,7 @@ class PEPO(TensorNetwork):
 
 
     def __clear_dangling(self, cp_nodes):
+        print(len(cp_nodes))
         output_edge_order = []
         def clear_dangling(node_idx, dangling_index):
             one = tn.Node(np.array([1]))
