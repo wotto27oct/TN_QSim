@@ -239,11 +239,25 @@ class TensorNetwork():
 
         arrays = [node.tensor for node in node_list]
 
-        results = [
+        pool = ThreadPoolExecutor(1)
+
+        contract_core_jit = jax.jit(tree.contract_core)
+
+        fs = [
+            pool.submit(contract_core_jit, tree.slice_arrays(arrays, i))
+            for i in range(tree.nslices)
+        ]
+
+        slices = (np.array(f.result()) for f in fs)
+
+        x = tree.gather_slices(slices, progbar=True)
+        return x
+
+        """results = [
             tree.contract_slice(arrays, i)
             for i in range(tree.nslices)
         ]
-        return tree.gather_slices(results)
+        return tree.gather_slices(results)"""
 
 
     def replace_tensors(self, tensor_indexes, r_tensors):
