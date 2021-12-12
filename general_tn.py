@@ -12,6 +12,7 @@ from itertools import chain
 from cotengra.core import ContractionTree
 from utils import from_nodes_to_str
 import jax
+from jax.lib import xla_bridge
 from concurrent.futures import ThreadPoolExecutor
 
 class TensorNetwork():
@@ -239,25 +240,27 @@ class TensorNetwork():
 
         arrays = [node.tensor for node in node_list]
 
-        pool = ThreadPoolExecutor(1)
+        if xla_bridge.get_backend().platform == "gpu" or tree.total_flops() > 1e10:
+            pool = ThreadPoolExecutor(1)
 
-        contract_core_jit = jax.jit(tree.contract_core)
+            contract_core_jit = jax.jit(tree.contract_core)
 
-        fs = [
-            pool.submit(contract_core_jit, tree.slice_arrays(arrays, i))
-            for i in range(tree.nslices)
-        ]
+            fs = [
+                pool.submit(contract_core_jit, tree.slice_arrays(arrays, i))
+                for i in range(tree.nslices)
+            ]
 
-        slices = (np.array(f.result()) for f in fs)
+            slices = (np.array(f.result()) for f in fs)
 
-        x = tree.gather_slices(slices, progbar=True)
-        return x
-
-        """results = [
-            tree.contract_slice(arrays, i)
-            for i in range(tree.nslices)
-        ]
-        return tree.gather_slices(results)"""
+            x = tree.gather_slices(slices, progbar=True)
+            return x
+        
+        else:
+            results = [
+                tree.contract_slice(arrays, i)
+                for i in range(tree.nslices)
+            ]
+            return tree.gather_slices(results)
 
 
     def replace_tensors(self, tensor_indexes, r_tensors):
