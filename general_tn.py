@@ -11,6 +11,8 @@ from collections import Counter
 from itertools import chain
 from cotengra.core import ContractionTree
 from utils import from_nodes_to_str
+import jax
+from concurrent.futures import ThreadPoolExecutor
 
 class TensorNetwork():
     """base class of Tensor Network

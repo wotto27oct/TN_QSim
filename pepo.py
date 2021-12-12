@@ -166,13 +166,8 @@ class PEPO(TensorNetwork):
         self.trace_tree = tree
         return tree, total_cost, max_sp_cost
 
-
-    def calc_pepo_trace(self, pepo, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
-        """ calc inner-product and generate trace of full density operator
-        
-        Returns:
-            np.array: tensor after contraction
-        """
+    
+    def prepare_pepo_trace(self, pepo):
         cp_nodes = tn.replicate_nodes(self.nodes)
         cp_nodes.extend(tn.replicate_nodes(pepo.nodes))
         for i in range(self.n):
@@ -188,6 +183,25 @@ class PEPO(TensorNetwork):
         output_edge_order = output_edge_order1 + output_edge_order2
         node_list = [node for node in cp_nodes]
 
+        return node_list, output_edge_order
+
+    
+    def find_pepo_trace_tree(self, pepo, algorithm=None, memory_limit=None, visualize=False):
+        
+        node_list, output_edge_order = self.prepare_pepo_trace(pepo)
+        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
+        self.pepo_trace_tree = tree
+        return tree, total_cost, max_sp_cost
+
+
+    def calc_pepo_trace(self, pepo, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """ calc inner-product and generate trace of full density operator
+        
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        node_list, output_edge_order = self.prepare_pepo_trace(pepo)
         #if path == None:
         #    path, total_cost = self.find_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
         #self.path = path
@@ -199,7 +213,6 @@ class PEPO(TensorNetwork):
 
 
     def __clear_dangling(self, cp_nodes):
-        print(len(cp_nodes))
         output_edge_order = []
         def clear_dangling(node_idx, dangling_index):
             one = tn.Node(np.array([1]))
