@@ -85,10 +85,11 @@ class PEPS(TensorNetwork):
             for dangling in cp_nodes[i].get_all_dangling():
                 output_edge_order.append(dangling)
 
-        if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        #if path == None:
+        #    path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
+        #self.path = path
+        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, None, path, visualize=visualize)
 
     
     def amplitude_BMPS(self, tensors):
