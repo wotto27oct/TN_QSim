@@ -19,9 +19,11 @@ class PEPDO(TensorNetwork):
     vertical virtual bond: 2n, 2n+1, ..., 2n+(height+1)-1, 2n+(height1), ..., 2n+(height+1)*width-1
     horizontal virtual bond: 2n+(height+1)*width, ..., 2n+(height+1)*width+(width+1)-1, ..., 2n+(height+1)*height+(height+1)*width-1
 
+    edge index order for each node: 0(physical) 1(up) 2(right) 3(down) 4(left) 5(inner)
+
     Attributes:
-        width (int) : PEPDO width
         height (int) : PEPDO height
+        width (int) : PEPDO width
         n (int) : the number of tensors
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
@@ -81,8 +83,11 @@ class PEPDO(TensorNetwork):
         """contract PEPDO and generate full density operator
 
         Args:
-            output_edge_order (list of tn.Edge) : the order of output edge
-        
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             np.array: tensor after contraction
         """
@@ -100,14 +105,8 @@ class PEPDO(TensorNetwork):
 
         for i in range(2*self.n):
             output_edge_order.append(cp_nodes[i][0])
-
-        #if tree == None and path == None:
-        #    tree, _, _  = self.find_contract_tree(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        #    self.tree = tree
         
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
-
-        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
 
     
     def prepare_trace(self):
@@ -127,20 +126,19 @@ class PEPDO(TensorNetwork):
 
     
     def calc_trace(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
-        """contract all PEPDO and generate trace of full density operator
-        
+        """contract PEPDO and generate trace of full density operator
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             np.array: tensor after contraction
         """
         
         node_list, output_edge_order = self.prepare_trace()
-
-        """if tree == None and path == None:
-            if self.trace_tree is not None:
-                tree = self.trace_tree
-            else:
-                tree, _, _= self.find_contract_tree(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-                self.trace_tree = tree"""
         
         if tree == None and path == None and self.trace_tree is not None:
             tree = self.trace_tree
@@ -149,8 +147,12 @@ class PEPDO(TensorNetwork):
 
 
     def find_trace_tree(self, algorithm=None, memory_limit=None, visualize=False):
-        """find contraction path of trace
-        
+        """find contraction tree of the trace of the PEPDO
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             tree (ctg.ContractionTree) : the contraction tree
             total_cost (int) : total temporal cost
@@ -278,6 +280,13 @@ class PEPDO(TensorNetwork):
 
     
     def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, algorithm=None, memory_limit=None):
+        """truncate the specified index using FET method
+
+        Args:
+            trun_node_idx (int) : the node index connected to the target edge
+            trun_edge_idx (int) : the target edge's index of the above node
+            truncate_dim (int) : the target bond dimension
+        """
         for i in range(self.n):
             self.nodes[i].name = f"node{i}"
         op_node_idx = 0

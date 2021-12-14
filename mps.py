@@ -63,6 +63,7 @@ class MPS(TensorNetwork):
         for i in range(self.n):
             output_edge_order.append(cp_nodes[i][0])
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
+        
 
     def apply_gate(self, tidx, gtensor):
         """ apply nqubit gate

@@ -17,9 +17,11 @@ class PEPO(TensorNetwork):
     vertical virtual bond: 2n, 2n+1, ..., 2n+(height+1)-1, 2n+(height1), ..., 2n+(height+1)*width-1
     horizontal virtual bond: 2n+(height+1)*width, ..., 2n+(height+1)*width+(width+1)-1, ..., 2n+(height+1)*height+(height+1)*width-1
 
+    edge index order for each node: 0(physical) 1(conj_physical) 2(up) 3(right) 4(down) 5(left)
+
     Attributes:
-        width (int) : PEPDO width
-        height (int) : PEPDO height
+        height (int) : PEPO height
+        width (int) : PEPO width
         n (int) : the number of tensors
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
@@ -79,8 +81,11 @@ class PEPO(TensorNetwork):
         """contract PEPO and generate full density operator
 
         Args:
-            output_edge_order (list of tn.Edge) : the order of output edge
-        
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             np.array: tensor after contraction
         """
@@ -96,25 +101,10 @@ class PEPO(TensorNetwork):
             
         node_list = [node for node in cp_nodes]
 
-        """for i in range(2*self.n):
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
-
-        if path == None:
-            path, total_cost, _ = self.find_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor"""
-
-        #if tree == None and path == None:
-        #    tree, _, _  = self.find_contract_tree(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        #    self.tree = tree
-
         if tree == None and path == None and self.tree is not None:
             tree = self.tree
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
-        
-        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
 
     
     def prepare_trace(self):
@@ -133,18 +123,19 @@ class PEPO(TensorNetwork):
 
     
     def calc_trace(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
-        """contract all PEPO and generate trace of full density operator
-        
+        """contract PEPO and generate trace of full density operator
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             np.array: tensor after contraction
         """
 
         node_list, output_edge_order = self.prepare_trace()
-
-        """if path == None:
-            path, total_cost, _ = self.find_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor"""
         
         if tree == None and path == None and self.trace_tree is not None:
             tree = self.trace_tree
@@ -152,9 +143,13 @@ class PEPO(TensorNetwork):
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)    
 
 
-    def find_trace_path(self, algorithm=None, memory_limit=None, visualize=False):
-        """find contraction path of trace
-        
+    def find_trace_tree(self, algorithm=None, memory_limit=None, visualize=False):
+        """find contraction tree of the trace of the PEPO
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             tree (ctg.ContractionTree) : the contraction tree
             total_cost (int) : total temporal cost
@@ -187,7 +182,19 @@ class PEPO(TensorNetwork):
 
     
     def find_pepo_trace_tree(self, pepo, algorithm=None, memory_limit=None, visualize=False):
-        
+        """find contraction tree of the pepo_trace of the PEPO
+
+        Args:
+            pepo (PEPO) : the PEPO object to be contracted together
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
         node_list, output_edge_order = self.prepare_pepo_trace(pepo)
         tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
         self.pepo_trace_tree = tree
@@ -195,25 +202,33 @@ class PEPO(TensorNetwork):
 
 
     def calc_pepo_trace(self, pepo, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
-        """ calc inner-product and generate trace of full density operator
-        
+        """calc product with pepo and trace out full density operator
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             np.array: tensor after contraction
         """
 
         node_list, output_edge_order = self.prepare_pepo_trace(pepo)
-        #if path == None:
-        #    path, total_cost = self.find_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        #self.path = path
         if tree == None and path == None and self.pepo_trace_tree is not None:
             tree = self.pepo_trace_tree
         
-        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
     
 
     def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, algorithm=None, memory_limit=None):
-        # not supported for trun_edge_idx=4or5 (do to the order of edge_disconnecting)
+        """truncate the specified index using FET method
+
+        Args:
+            trun_node_idx (int) : the node index connected to the target edge
+            trun_edge_idx (int) : the target edge's index of the above node
+            truncate_dim (int) : the target bond dimension
+        """
         op_node_idx = 0
         op_edge_idx = 0
         if trun_edge_idx == 2:
@@ -356,8 +371,7 @@ class PEPO(TensorNetwork):
                     edge_order.append(cp_nodes[node_idx][i])
             cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
 
-        # 5,4,3,2,1,0の順に消す
-        # 表，裏
+        # delete dangling in order 5,4,3,2,1,0
         for h in range(self.height):
             if cp_nodes[h*self.width].get_dimension(5) == 1:
                 clear_dangling(h*self.width, 5)

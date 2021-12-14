@@ -54,6 +54,7 @@ class TensorNetwork():
                     edge_list[edges[i][j]] = [i, j, False]
                     node_edges[j].set_name(f"edge {edges[i][j]}")
 
+
     def contract(self, output_edge_order=None):
         """contract the whole Tensor Network destructively
 
@@ -71,6 +72,27 @@ class TensorNetwork():
 
 
     def visualize_tree(self, tree, node_list, output_edge_order=None, path=None, visualize=False):
+        """calc contraction cost and visualize contract path for given tree and nodes
+
+        Args:
+            tree (ctg.ContractionTree) : the contraction tree
+            node_list (list of tn.Node) : the nodes contracted
+            output_edge_order (list of tn.Edge) : the order of output edge
+            path (list of tuple of int) : the contraction path. If tree is None, this is converted to the tree
+            visualize (bool) : if or not visualize contraction process
+        
+        Returns:
+            total_cost (int) : the total contraction cost
+            max_sp_cost (int) : the max space cost
+            einsum_str_list (list of str) : contraction einsum for each step
+            contract_einsum_str_list (list of str) : actual contraction einsum for each step
+            edge_alpha_dims (dict) : dict from edge to alphabet
+            cost_list (list of int) : contraction cost for each step
+            total_cost (int) : total contraction cost
+            sp_cost_list (list of int) : space contraction cost for each step
+            max_sp_cost (int) : maximum space contraction cost
+        """
+
         if tree == None:
             inputs, output, size_dict = from_nodes_to_str(node_list, output_edge_order)
             tree = ContractionTree.from_path(inputs, output, size_dict, path=path)
@@ -182,9 +204,9 @@ class TensorNetwork():
 
         Args:
             node_list (list of tn.Node) : the nodes contracted
-            algorithm : the path calculator
-            memory_limit (int) : memory limit, default 2**28
             output_edge_order (list of tn.Edge) : the order of output edge
+            algorithm : the algorithm to find contraction path
+            memory_limit (int) : memory limit, default 2**28
             visualize (bool) : if or not visualize contraction process
         
         Returns:
@@ -214,13 +236,14 @@ class TensorNetwork():
 
 
     def contract_tree(self, node_list, output_edge_order=None, algorithm=None, memory_limit=2**28, tree=None, path=None, visualize=False):   
-        """calc contract path for given input and algorithm
+        """execute contraction for given input and algorithm or tree
 
         Args:
             node_list (list of tn.Node) : the nodes contracted
             output_edge_order (list of tn.Edge) : the order of output edge
-            path (tuple of tuple of int) : contraction path
+            algorithm : the algorithm to find contraction path
             memory_limit (int) : memory limit, default 2**28
+            path (tuple of tuple of int) : contraction path
             visualize (bool) : if or not visualize contraction process
         
         Returns:
@@ -241,6 +264,7 @@ class TensorNetwork():
         arrays = [node.tensor for node in node_list]
 
         if tree.total_flops() > 1e10:
+            # use jax to use jit and GPU
             pool = ThreadPoolExecutor(1)
 
             contract_core_jit = jax.jit(tree.contract_core)

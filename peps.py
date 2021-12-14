@@ -16,9 +16,11 @@ class PEPS(TensorNetwork):
     vertical virtual bond: n, n+1, ..., n+(height+1)-1, n+(height1), ..., n+(height+1)*width-1
     horizontal virtual bond: n+(height+1)*width, ..., n+(height+1)*width+(width+1)-1, ..., n + (height+1)*height + (height+1)*width-1
 
+    edge index order for each node: 0(physical) 1(up) 2(right) 3(down) 4(left)
+
     Attributes:
-        width (int) : PEPS width
         height (int) : PEPS height
+        width (int) : PEPS width
         n (int) : the number of tensors
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
@@ -65,12 +67,15 @@ class PEPS(TensorNetwork):
         return virtual_dims
 
 
-    def contract(self, algorithm=None, memory_limit=None, path=None, visualize=False):
-        """contract whole PEPS and generate full state (+alpha)
+    def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """contract PEPS and generate full state
 
         Args:
-            output_edge_order (list of tn.Edge) : the order of output edge
-        
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
         Returns:
             np.array: tensor after contraction
         """
@@ -81,18 +86,23 @@ class PEPS(TensorNetwork):
 
         node_list = [node for node in cp_nodes]
 
-        for i in range(self.n):
+        """for i in range(self.n):
             for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
+                output_edge_order.append(dangling)"""
+        for i in range(self.n):
+            output_edge_order.append(cp_nodes[i][0])
 
-        #if path == None:
-        #    path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        #self.path = path
-        #return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
-        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, None, path, visualize=visualize)
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
     
     def amplitude_BMPS(self, tensors):
+        """calculate amplitude with given product states (typically computational basis) using BMPS
+
+        Args:
+            tensor (list of np.array) : the amplitude index represented by the list of tensor
+        Returns:
+            np.array: tensor after contraction
+        """
         cp_nodes = tn.replicate_nodes(self.nodes)
 
         # if there are dangling edges which dimension is 1, contract first
@@ -149,11 +159,11 @@ class PEPS(TensorNetwork):
         return mps.contract().flatten()[0]
 
     
-    def amplitude(self, tensors, algorithm=None, memory_limit=None, path=None, visualize=False):
+    def amplitude(self, tensors, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
         """contract amplitude with given product states (typically computational basis)
 
         Args:
-            tensor (list of np.array) : the given index represented by the list of tensor
+            tensor (list of np.array) : the amplitude index represented by the list of tensor
         
         Returns:
             np.array: tensor after contraction
@@ -169,15 +179,12 @@ class PEPS(TensorNetwork):
             tn.connect(cp_nodes[i][0], state[0])
             edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
             cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
+            #for dangling in cp_nodes[i].get_all_dangling():
+            #    output_edge_order.append(dangling)
 
         node_list = [node for node in cp_nodes]
         
-        if path == None:
-            path, total_cost = self.calc_contract_path(node_list, algorithm=algorithm, memory_limit=memory_limit, output_edge_order=output_edge_order, visualize=visualize)
-        self.path = path
-        return tn.contractors.contract_path(path, node_list, output_edge_order).tensor
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
     
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []
