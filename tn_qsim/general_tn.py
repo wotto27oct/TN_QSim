@@ -281,6 +281,81 @@ class TensorNetwork():
             ]
             return tree.gather_slices(results)
 
+    
+    def find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, visualize=False):
+        """find optimal truncation U, Vh given Gamma and trun_dim
+        Args:
+            Gamma (np.array) : env-tensor Gamma_iIjJ
+            turncate_dim (int) : target bond dimension
+            trials (int) : the number of iteration
+            visualize (bool) : print or not
+        Returns:
+            U (np.array) : left gauge tensor after optimization, shape (bond, trun)
+            Vh (np.array) : right gauge tensor after optimization, shape (trun, bond)
+        """
+        bond_dim = Gamma.shape[0]
+        trun_dim = truncate_dim
+        if visualize:
+            print(f"bond: {bond_dim}, trun: {trun_dim}")
+
+        I = np.eye(bond_dim)
+        U, s, Vh = np.linalg.svd(I)
+        U = U[:,:trun_dim]
+        S = np.diag(s[:trun_dim])
+        Vh = Vh[:trun_dim, :]
+
+        Fid = oe.contract("iIiI", Gamma)
+        if visualize:
+            print(f"Fid before truncation: {Fid}")
+
+        R = oe.contract("pq,qj->pj",S,Vh).flatten()
+        P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+        A = oe.contract("a,b->ab",P,P.conj())
+        B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+        Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
+        if visualize:
+            print(f"Fid before optimization: {Fid}")
+
+        for i in range(trials):
+            ## step1
+            R = oe.contract("pq,qj->pj",S,Vh).flatten()
+            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+            A = oe.contract("a,b->ab",P,P.conj())
+            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+
+            #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
+
+            Rmax = np.dot(np.linalg.pinv(B), P)
+            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+            if visualize:
+                print(f"fid at trial {i} step1: {Fid}")
+
+            Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
+            S = np.dot(Utmp, np.diag(stmp))
+
+            """Binv = np.linalg.inv(B)
+            Aprime = np.dot(Binv, A)
+            eig, w = np.linalg.eig(Aprime)
+            print(eig)"""
+
+            ## step2
+            R = oe.contract("ip,pq->qi",U,S).flatten()
+            P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj()).flatten()
+            A = oe.contract("a,b->ab",P,P.conj())
+            B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+
+            Rmax = np.dot(np.linalg.pinv(B), P)
+            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+            if visualize:
+                print(f"fid at trial {i} step2: {Fid}")
+
+            U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
+            S = np.dot(np.diag(stmp), Vhtmp)
+        
+        U = np.dot(U, S)
+
+        return U, Vh
+
 
     def replace_tensors(self, tensor_indexes, r_tensors):
         """replace tensors

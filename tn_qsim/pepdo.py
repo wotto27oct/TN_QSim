@@ -271,13 +271,15 @@ class PEPDO(TensorNetwork):
             self.nodes[tidx[i]] = node_list[i]
 
     
-    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, algorithm=None, memory_limit=None):
+    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, trials=10, algorithm=None, memory_limit=None, visualize=False):
         """truncate the specified index using FET method
 
         Args:
             trun_node_idx (int) : the node index connected to the target edge
             trun_edge_idx (int) : the target edge's index of the above node
             truncate_dim (int) : the target bond dimension
+            trial (int) : the number of iterations
+            visualize (bool) : if printing the optimization process or not
         """
         for i in range(self.n):
             self.nodes[i].name = f"node{i}"
@@ -295,8 +297,6 @@ class PEPDO(TensorNetwork):
         else:
             op_node_idx = trun_node_idx - 1
             op_edge_idx = 2
-
-        print("trun_node_idx:", trun_node_idx, "trun_edge_idx:", trun_edge_idx, "op_node_idx:", op_node_idx, "op_edge_idx:", op_edge_idx)
 
         if self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
             print("trun_dim already satisfied")
@@ -325,64 +325,9 @@ class PEPDO(TensorNetwork):
             tn.connect(output_edge_order1[i], output_edge_order1[i+len(output_edge_order1)//2])
         node_list = [node for node in cp_nodes]
 
-        Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)
+        Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)        
 
-        bond_dim = Gamma.shape[0]
-        trun_dim = truncate_dim
-        print(f"bond: {bond_dim}, trun: {trun_dim}")
-
-        I = np.eye(bond_dim)
-        U, s, Vh = np.linalg.svd(I)
-        U = U[:,:trun_dim]
-        S = np.diag(s[:trun_dim])
-        Vh = Vh[:trun_dim, :]
-        print(U.shape, S.shape, Vh.shape)
-
-        Fid = oe.contract("iIiI", Gamma)
-        print(f"Fid before truncation: {Fid}")
-
-        R = oe.contract("pq,qj->pj",S,Vh).flatten()
-        P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
-        A = oe.contract("a,b->ab",P,P.conj())
-        B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-        Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-        print(f"Fid before optimization: {Fid}")
-
-        for i in range(10):
-            ## step1
-            R = oe.contract("pq,qj->pj",S,Vh).flatten()
-            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
-            A = oe.contract("a,b->ab",P,P.conj())
-            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-
-            #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-
-            Rmax = np.dot(np.linalg.pinv(B), P)
-            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
-            print(f"fid at trial {i} step1: {Fid}")
-
-            Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
-            S = np.dot(Utmp, np.diag(stmp))
-
-            """Binv = np.linalg.inv(B)
-            Aprime = np.dot(Binv, A)
-            eig, w = np.linalg.eig(Aprime)
-            print(eig)"""
-
-            ## step2
-            R = oe.contract("ip,pq->qi",U,S).flatten()
-            P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj()).flatten()
-            A = oe.contract("a,b->ab",P,P.conj())
-            B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
-
-            Rmax = np.dot(np.linalg.pinv(B), P)
-            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
-            print(f"fid at trial {i} step2: {Fid}")
-
-            U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
-            S = np.dot(np.diag(stmp), Vhtmp)
-        
-        U = np.dot(U, S)
+        U, Vh = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
         Unode = tn.Node(U)
         Vhnode = tn.Node(Vh)
         tn.connect(Unode[1], Vhnode[0])
@@ -413,3 +358,5 @@ class PEPDO(TensorNetwork):
             else:
                 node_edge_list.append(op_node[i])
         self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+        print(f"truncated from {U.shape[0]} to {truncate_dim}")
