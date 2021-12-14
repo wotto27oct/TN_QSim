@@ -1,0 +1,30 @@
+FROM nvidia/cuda:11.4.2-cudnn8-devel-ubuntu18.04
+
+RUN apt-get update && apt-get install -y \
+        python3-pip \
+        libffi-dev \
+        vim \
+        tmux \
+        git \
+    &&  apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --upgrade pip
+RUN pip3 install --upgrade jax[cuda11_cudnn82] jaxlib[cuda11_cudnn82] -f https://storage.googleapis.com/jax-releases/jax_releases.html
+RUN pip3 install tensorflow
+RUN pip3 install cupy-cuda114
+RUN pip3 install scikit-learn
+RUN pip3 install matplotlib
+RUN pip3 install pandas
+RUN pip3 install opt_einsum
+RUN pip3 install kahypar
+RUN pip3 install tqdm
+RUN pip3 install optuna
+RUN pip3 install autoray
+RUN pip3 install tensornetwork
+
+ENV CUDA_VISIBLE_DEVICES 0
+ENV XLA_PYTHON_CLIENT_PREALLOCATE false
+
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D"]
