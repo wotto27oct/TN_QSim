@@ -1,4 +1,5 @@
 from math import trunc
+from os import truncate
 from typing import ValuesView
 import numpy as np
 from numpy.core.fromnumeric import _reshape_dispatcher
@@ -274,3 +275,137 @@ class PEPDO(TensorNetwork):
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
+
+    
+    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, algorithm=None, memory_limit=None):
+        for i in range(self.n):
+            self.nodes[i].name = f"node{i}"
+        op_node_idx = 0
+        op_edge_idx = 0
+        if trun_edge_idx == 1:
+            op_node_idx = trun_node_idx - self.width
+            trun_edge_idx = 3
+        elif trun_edge_idx == 2:
+            op_node_idx = trun_node_idx + 1
+            op_edge_idx = 4
+        elif trun_edge_idx == 3:
+            op_node_idx = trun_node_idx + self.width
+            op_edge_idx = 1
+        else:
+            op_node_idx = trun_node_idx - 1
+            op_edge_idx = 2
+
+        print("trun_node_idx:", trun_node_idx, "trun_edge_idx:", trun_edge_idx, "op_node_idx:", op_node_idx, "op_edge_idx:", op_edge_idx)
+
+        if self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
+            print("trun_dim already satisfied")
+            return
+
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            if cp_nodes[i].get_dimension(5) != 1:
+                tn.connect(cp_nodes[i][5], cp_nodes[i+self.n][5])
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+        
+        edge_i, edge_j = cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
+        edge_I, edge_J = cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        cp_nodes, output_edge_order1 = self.__clear_dangling(cp_nodes)
+        # crear all othre output_edge
+        for i in range(len(output_edge_order1)//2):
+            tn.connect(output_edge_order1[i], output_edge_order1[i+len(output_edge_order1)//2])
+        #output_edge_order.extend(output_edge_order1)
+        node_list = [node for node in cp_nodes]
+
+        Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)
+
+        bond_dim = Gamma.shape[0]
+        trun_dim = truncate_dim
+        print(f"bond: {bond_dim}, trun: {trun_dim}")
+
+        I = np.eye(bond_dim)
+        U, s, Vh = np.linalg.svd(I)
+        U = U[:,:trun_dim]
+        S = np.diag(s[:trun_dim])
+        Vh = Vh[:trun_dim, :]
+        print(U.shape, S.shape, Vh.shape)
+
+        Fid = oe.contract("iIiI", Gamma)
+        print(f"Fid before truncation: {Fid}")
+
+        R = oe.contract("pq,qj->pj",S,Vh).flatten()
+        P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+        A = oe.contract("a,b->ab",P,P.conj())
+        B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+        Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
+        print(f"Fid before optimization: {Fid}")
+
+        for i in range(10):
+            ## step1
+            R = oe.contract("pq,qj->pj",S,Vh).flatten()
+            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+            A = oe.contract("a,b->ab",P,P.conj())
+            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+
+            #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
+
+            Rmax = np.dot(np.linalg.pinv(B), P)
+            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+            print(f"fid at trial {i} step1: {Fid}")
+
+            Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
+            S = np.dot(Utmp, np.diag(stmp))
+
+            """Binv = np.linalg.inv(B)
+            Aprime = np.dot(Binv, A)
+            eig, w = np.linalg.eig(Aprime)
+            print(eig)"""
+
+            ## step2
+            R = oe.contract("ip,pq->qi",U,S).flatten()
+            P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj()).flatten()
+            A = oe.contract("a,b->ab",P,P.conj())
+            B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+
+            Rmax = np.dot(np.linalg.pinv(B), P)
+            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+            print(f"fid at trial {i} step2: {Fid}")
+
+            U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
+            S = np.dot(np.diag(stmp), Vhtmp)
+        
+        U = np.dot(U, S)
+        Unode = tn.Node(U)
+        Vhnode = tn.Node(Vh)
+        tn.connect(Unode[1], Vhnode[0])
+
+        left_edge, right_edge = self.nodes[trun_node_idx][trun_edge_idx].disconnect()
+        if left_edge.node1 != self.nodes[trun_node_idx]:
+            left_edge, right_edge = right_edge, left_edge
+        op_node = self.nodes[op_node_idx]
+
+        # connect self.node[trun_node_idx] and Unode
+        tn.connect(left_edge, Unode[0])
+        node_contract_list = [self.nodes[trun_node_idx], Unode]
+        node_edge_list = []
+        for i in range(6):
+            if i == trun_edge_idx:
+                node_edge_list.append(Unode[1])
+            else:
+                node_edge_list.append(self.nodes[trun_node_idx][i])
+        self.nodes[trun_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+        # connect op_node and Vhnode
+        tn.connect(Vhnode[1], right_edge)
+        node_contract_list = [op_node, Vhnode]
+        node_edge_list = []
+        for i in range(6):
+            if i == op_edge_idx:
+                node_edge_list.append(Vhnode[0])
+            else:
+                node_edge_list.append(op_node[i])
+        self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
