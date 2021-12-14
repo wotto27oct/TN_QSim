@@ -1,15 +1,7 @@
-from math import trunc
-from os import truncate
-from typing import ValuesView
 import numpy as np
-from numpy.core.fromnumeric import _reshape_dispatcher
 import opt_einsum as oe
-import cotengra as ctg
 import tensornetwork as tn
-from mpo import MPO
-from mps import MPS
-from general_tn import TensorNetwork
-from cotengra.core import ContractionTree
+from tn_qsim.general_tn import TensorNetwork
 
 class PEPDO(TensorNetwork):
     """class of PEPDO
@@ -293,7 +285,7 @@ class PEPDO(TensorNetwork):
         op_edge_idx = 0
         if trun_edge_idx == 1:
             op_node_idx = trun_node_idx - self.width
-            trun_edge_idx = 3
+            op_edge_idx = 3
         elif trun_edge_idx == 2:
             op_node_idx = trun_node_idx + 1
             op_edge_idx = 4
@@ -318,8 +310,12 @@ class PEPDO(TensorNetwork):
                 tn.connect(cp_nodes[i][5], cp_nodes[i+self.n][5])
             tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
         
-        edge_i, edge_j = cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
-        edge_I, edge_J = cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
+        cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        edge_i = cp_nodes[trun_node_idx][trun_edge_idx]
+        edge_I = cp_nodes[trun_node_idx+self.n][trun_edge_idx]
+        edge_j = cp_nodes[op_node_idx][op_edge_idx]
+        edge_J = cp_nodes[op_node_idx+self.n][op_edge_idx]
         output_edge_order = [edge_i, edge_I, edge_j, edge_J]
 
         # if there are dangling edges which dimension is 1, contract first (including inner dim)
@@ -327,7 +323,6 @@ class PEPDO(TensorNetwork):
         # crear all othre output_edge
         for i in range(len(output_edge_order1)//2):
             tn.connect(output_edge_order1[i], output_edge_order1[i+len(output_edge_order1)//2])
-        #output_edge_order.extend(output_edge_order1)
         node_list = [node for node in cp_nodes]
 
         Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)

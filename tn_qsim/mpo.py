@@ -1,11 +1,8 @@
-from math import trunc
-from typing import ValuesView
 import numpy as np
-from numpy.core.fromnumeric import _reshape_dispatcher
 import opt_einsum as oe
 import cotengra as ctg
 import tensornetwork as tn
-from general_tn import TensorNetwork
+from tn_qsim.general_tn import TensorNetwork
 
 class MPO(TensorNetwork):
     """class of MPO

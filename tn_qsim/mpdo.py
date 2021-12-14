@@ -1,13 +1,7 @@
-from math import trunc
-from typing import ValuesView
 import numpy as np
-from numpy.core.fromnumeric import _reshape_dispatcher
-from numpy.core.numeric import full
-from scipy.linalg.special_matrices import fiedler
 import opt_einsum as oe
-import cotengra as ctg
 import tensornetwork as tn
-from general_tn import TensorNetwork
+from tn_qsim.general_tn import TensorNetwork
 
 class MPDO(TensorNetwork):
     """class of MPDO
@@ -220,11 +214,13 @@ class MPDO(TensorNetwork):
         
         return np.array(output)
 
+
     def calc_trace(self):
         left_tensor = oe.contract("abcd,aefd->becf", self.nodes[0].tensor, self.nodes[0].tensor.conj())
         for i in range(1, self.n):
             left_tensor = oe.contract("ghbe,abcd,aefd->ghcf", left_tensor, self.nodes[i].tensor, self.nodes[i].tensor.conj())
         return left_tensor
+
 
     def __move_right_canonical(self):
         """ move canonical apex to right

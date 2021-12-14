@@ -1,15 +1,9 @@
-from math import trunc
-from typing import ValuesView
 import numpy as np
-from numpy.core.fromnumeric import _reshape_dispatcher
-import opt_einsum as oe
-import cotengra as ctg
 import tensornetwork as tn
-from general_tn import TensorNetwork
-from peps import PEPS
+from tn_qsim.peps import PEPS
 
 class PEPS3D(PEPS):
-    """class of PEPS3D
+    """class of PEPS3D, not implemented yet
 
     physical bond: 0, 1, ..., n-1
     vertical virtual bond: n, n+1, ..., n+(height+1)-1, n+(height1), ..., n+(height+1)*width-1

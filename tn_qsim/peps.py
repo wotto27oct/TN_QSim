@@ -1,13 +1,8 @@
-from math import trunc
-from typing import ValuesView
 import numpy as np
-from numpy.core.fromnumeric import _reshape_dispatcher
-import opt_einsum as oe
-import cotengra as ctg
 import tensornetwork as tn
-from mpo import MPO
-from mps import MPS
-from general_tn import TensorNetwork
+from tn_qsim.mpo import MPO
+from tn_qsim.mps import MPS
+from tn_qsim.general_tn import TensorNetwork
 
 class PEPS(TensorNetwork):
     """class of PEPS
@@ -179,8 +174,6 @@ class PEPS(TensorNetwork):
             tn.connect(cp_nodes[i][0], state[0])
             edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
             cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
-            #for dangling in cp_nodes[i].get_all_dangling():
-            #    output_edge_order.append(dangling)
 
         node_list = [node for node in cp_nodes]
         

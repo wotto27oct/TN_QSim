@@ -1,18 +1,13 @@
-from os import times_result
 import numpy as np
-from numpy.lib.arraysetops import ediff1d
-from numpy.lib.shape_base import _apply_along_axis_dispatcher
 import opt_einsum as oe
 import cotengra as ctg
 import tensornetwork as tn
 import functools
-import itertools
 from collections import Counter
 from itertools import chain
 from cotengra.core import ContractionTree
-from utils import from_nodes_to_str
+from tn_qsim.utils import from_nodes_to_str
 import jax
-from jax.lib import xla_bridge
 from concurrent.futures import ThreadPoolExecutor
 
 class TensorNetwork():

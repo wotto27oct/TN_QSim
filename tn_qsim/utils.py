@@ -1,7 +1,6 @@
 import opt_einsum as oe
 import tensornetwork as tn
 
-
 def from_nodes_to_str(node_list, output_edge_order):
     input_sets = [set(node.edges) for node in node_list]
     output_set = set()

@@ -1,13 +1,7 @@
-from math import trunc
-from typing import ValuesView
 import numpy as np
-from numpy.core.fromnumeric import _reshape_dispatcher
 import opt_einsum as oe
-import cotengra as ctg
 import tensornetwork as tn
-from mpo import MPO
-from mps import MPS
-from general_tn import TensorNetwork
+from tn_qsim.general_tn import TensorNetwork
 
 class PEPO(TensorNetwork):
     """class of PEPDO
@@ -221,21 +215,21 @@ class PEPO(TensorNetwork):
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
     
 
-    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, algorithm=None, memory_limit=None):
+    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, trials=10, algorithm=None, memory_limit=None):
         """truncate the specified index using FET method
 
         Args:
             trun_node_idx (int) : the node index connected to the target edge
             trun_edge_idx (int) : the target edge's index of the above node
             truncate_dim (int) : the target bond dimension
+            trial (int) : the number of trials
+            eps (float) : if diff < eps, stop iteration
         """
         op_node_idx = 0
         op_edge_idx = 0
         if trun_edge_idx == 2:
-            op_node_idx = trun_node_idx
-            trun_node_idx -= self.width
-            op_edge_idx = 2
-            trun_edge_idx = 4
+            op_node_idx = trun_node_idx - self.width
+            op_edge_idx = 4
         elif trun_edge_idx == 3:
             op_node_idx += 1
             op_edge_idx = 5
@@ -243,12 +237,14 @@ class PEPO(TensorNetwork):
             op_node_idx = trun_node_idx + self.width
             op_edge_idx = 2
         else:
-            op_node_idx = trun_node_idx
-            trun_node_idx -= 1
-            op_edge_idx = 5
-            trun_edge_idx = 3
+            op_node_idx = trun_node_idx - 1
+            op_edge_idx = 3
 
         print(trun_node_idx, trun_edge_idx)
+
+        if self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
+            print("trun_dim already satisfied")
+            return
 
         cp_nodes = tn.replicate_nodes(self.nodes)
         cp_nodes.extend(tn.replicate_nodes(self.nodes))
@@ -259,8 +255,12 @@ class PEPO(TensorNetwork):
             if cp_nodes[i].get_dimension(1) != 1:
                 tn.connect(cp_nodes[i][1], cp_nodes[i+self.n][1])
         
-        edge_i, edge_j = cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
-        edge_I, edge_J = cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
+        cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        edge_i = cp_nodes[trun_node_idx][trun_edge_idx]
+        edge_I = cp_nodes[trun_node_idx+self.n][trun_edge_idx]
+        edge_j = cp_nodes[op_node_idx][op_edge_idx]
+        edge_J = cp_nodes[op_node_idx+self.n][op_edge_idx]
         output_edge_order = [edge_i, edge_I, edge_j, edge_J]
 
         # if there are dangling edges which dimension is 1, contract first (including inner dim)
@@ -294,7 +294,7 @@ class PEPO(TensorNetwork):
         Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
         print(f"Fid before optimization: {Fid}")
 
-        for i in range(10):
+        for i in range(trials):
             ## step1
             R = oe.contract("pq,qj->pj",S,Vh).flatten()
             P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
@@ -333,9 +333,9 @@ class PEPO(TensorNetwork):
         Vhnode = tn.Node(Vh)
         tn.connect(Unode[1], Vhnode[0])
 
-        left_edge, right_edge = self.nodes[trun_node_idx][trun_edge_idx].disconnect()
-        edge_nodes = right_edge.get_nodes()
-        op_node = self.nodes[op_node_idx]
+        self.nodes[trun_node_idx][trun_edge_idx].disconnect()
+        left_edge = self.nodes[trun_node_idx][trun_edge_idx]
+        right_edge = self.nodes[op_node_idx][op_edge_idx]
 
         # connect self.node[trun_node_idx] and Unode
         tn.connect(left_edge, Unode[0])
@@ -350,13 +350,13 @@ class PEPO(TensorNetwork):
 
         # connect op_node and Vhnode
         tn.connect(Vhnode[1], right_edge)
-        node_contract_list = [op_node, Vhnode]
+        node_contract_list = [self.nodes[op_node_idx], Vhnode]
         node_edge_list = []
         for i in range(6):
             if i == op_edge_idx:
                 node_edge_list.append(Vhnode[0])
             else:
-                node_edge_list.append(op_node[i])
+                node_edge_list.append(self.nodes[op_node_idx][i])
         self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
 
 
