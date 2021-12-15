@@ -214,6 +214,8 @@ class TensorNetwork():
 
         if algorithm == None:
             algorithm = functools.partial(oe.paths.greedy, memory_limit=memory_limit)
+        elif algorithm == "optimal":
+            algorithm = functools.partial(oe.paths.optimal, memory_limit=memory_limit)
 
         path, tree = None, None
 
