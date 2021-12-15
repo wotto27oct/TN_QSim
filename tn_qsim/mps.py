@@ -1,7 +1,7 @@
 import numpy as np
 import opt_einsum as oe
 import tensornetwork as tn
-from tn_qsim.general_tn import TensorNetworks
+from tn_qsim.general_tn import TensorNetwork
 
 class MPS(TensorNetwork):
     """class of MPS

@@ -9,6 +9,7 @@ from cotengra.core import ContractionTree
 from tn_qsim.utils import from_nodes_to_str
 import jax
 from concurrent.futures import ThreadPoolExecutor
+from jax.interpreters import xla
 
 class TensorNetwork():
     """base class of Tensor Network
@@ -274,6 +275,8 @@ class TensorNetwork():
             slices = (np.array(f.result()) for f in fs)
 
             x = tree.gather_slices(slices, progbar=True)
+            for node in node_list:
+                node.tensor = None
             return x
         
         else:
@@ -281,7 +284,12 @@ class TensorNetwork():
                 tree.contract_slice(arrays, i)
                 for i in range(tree.nslices)
             ]
-            return tree.gather_slices(results)
+
+            result = tree.gather_slices(results)
+            #xla._xla_callable.cache_clear()
+            for node in node_list:
+                node.tensor = None
+            return result
 
     
     def find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, visualize=False):

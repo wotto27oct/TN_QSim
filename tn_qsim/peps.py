@@ -90,6 +90,38 @@ class PEPS(TensorNetwork):
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
     
+    def amplitude(self, tensors, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """contract amplitude with given product states (typically computational basis)
+
+        Args:
+            tensor (list of np.array) : the amplitude index represented by the list of tensor
+        
+        Returns:
+            np.array: tensor after contraction
+        """
+        cp_nodes = tn.replicate_nodes(self.nodes)
+
+        # if there are dangling edges which dimension is 1, contract first
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+
+        node_list = []
+
+        # contract product state first
+        for i in range(self.n):
+            state = tn.Node(tensors[i])
+            tn.connect(cp_nodes[i][0], state[0])
+            edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
+            #cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
+            node_list.append(tn.contractors.auto([cp_nodes[i], state], edge_order))
+            cp_nodes[i].tensor = None
+            state.tensor = None
+
+        #node_list = [node for node in cp_nodes]
+
+        result = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+        return result
+
+    
     def amplitude_BMPS(self, tensors):
         """calculate amplitude with given product states (typically computational basis) using BMPS
 
@@ -153,32 +185,6 @@ class PEPS(TensorNetwork):
             total_fid = total_fid * fid
             
         return mps.contract().flatten()[0]
-
-    
-    def amplitude(self, tensors, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
-        """contract amplitude with given product states (typically computational basis)
-
-        Args:
-            tensor (list of np.array) : the amplitude index represented by the list of tensor
-        
-        Returns:
-            np.array: tensor after contraction
-        """
-        cp_nodes = tn.replicate_nodes(self.nodes)
-
-        # if there are dangling edges which dimension is 1, contract first
-        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
-
-        # contract product state first
-        for i in range(self.n):
-            state = tn.Node(tensors[i])
-            tn.connect(cp_nodes[i][0], state[0])
-            edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
-            cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
-
-        node_list = [node for node in cp_nodes]
-        
-        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
     
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []
@@ -315,7 +321,6 @@ class PEPS(TensorNetwork):
                     tn.connect(node[2], one[0])
                     node_contract_list.append(one)
                     tn.connect(node[1], self.nodes[tidx[i]][0])
-                    self.find_contract_tree(node_contract_list, node_edge_list, "optimal", visualize=True)
                     node_list.append(tn.contractors.optimal(node_contract_list, output_edge_order=node_edge_list))
                     edge_list.append(node_edge_list)
                 else:
