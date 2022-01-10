@@ -209,40 +209,49 @@ class MPS(TensorNetwork):
                     edge_list.append(node_edge_list)
                 else:
                     tn.connect(node[1], self.nodes[tidx[i]][0])
-                    
-                    svd_node_list = [node_list[i-1], self.nodes[tidx[i]], node]
+
+                    # split nodes of MPS via QR
+                    l_l_edges = [node_list[i-1][0], node_list[i-1][dir%2+1]]
+                    l_r_edges = [node_list[i-1][dir], node_list[i-1][3]]
+                    lQ, lR = tn.split_node_qr(node_list[i-1], l_l_edges, l_r_edges, edge_name="qr_left")
+                    qr_left_edge = lQ.get_edge("qr_left")
+                    lQ = lQ.reorder_edges(l_l_edges + [qr_left_edge])
+                    lR = lR.reorder_edges(l_r_edges + [qr_left_edge])
+                    r_l_edges = [self.nodes[tidx[i]][0], self.nodes[tidx[i]][dir%2+1]]
+                    r_r_edges = [self.nodes[tidx[i]][dir]]
+                    rR, rQ = tn.split_node_rq(self.nodes[tidx[i]], r_l_edges, r_r_edges, edge_name="qr_right")
+                    qr_right_edge = rQ.get_edge("qr_right")
+                    rR = rR.reorder_edges(r_l_edges + [qr_right_edge])
+                    rQ = rQ.reorder_edges(r_r_edges + [qr_right_edge])
+
+                    # contract left_R, right_R, node
                     svd_node_edge_list = None
+                    svd_node_list = [lR, rR, node]
                     if i == mpo.n - 1:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[3], one[0])
-                        svd_node_edge_list = [node_list[i-1][0], node_list[i-1][dir%2+1], node[0], self.nodes[tidx[i]][dir]]
+                        svd_node_edge_list = [qr_left_edge, node[0], qr_right_edge]
                         svd_node_list.append(one)
                     else:
-                        svd_node_edge_list = [node_list[i-1][0], node_list[i-1][dir%2+1], node[0], self.nodes[tidx[i]][dir], node[3]]
-                    #print("contraction to svd_node")
+                        svd_node_edge_list = [qr_left_edge, node[0], node[3], qr_right_edge]
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
-                    #print("contraction to svd_node done")
-                    #print("bmps svd", svd_node.tensor.shape)
-                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0], svd_node[1]], [svd_node[i] for i in range(2, len(svd_node.edges))], self.truncate_dim)
-                    #print("bmps svd done")
-                    s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
-                    trun_s_sq = np.dot(trun_s, trun_s)
-                    fidelity = s_sq / (s_sq + trun_s_sq)
-                    total_fidelity *= fidelity
-                    l_edge_order = [svd_node_edge_list[i] for i in range(0, dir)] + [s[0]] + [svd_node_edge_list[i] for i in range(dir, 2)]
-                    node_list[i-1] = U.reorder_edges(l_edge_order)
+
+                    # split via SVD for truncation
+                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
+                    node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     r_edge_order = None
                     if i == mpo.n - 1:
                         if dir == 2: # right
-                            r_edge_order = [svd_node_edge_list[2]] + [s[0]] + [svd_node_edge_list[3]]
+                            r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]]
                         else:
-                            r_edge_order = [svd_node_edge_list[2]] + [svd_node_edge_list[3]] + [s[0]]
+                            r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]]
                     else:
                         if dir == 2: # right
-                            r_edge_order = [svd_node_edge_list[2]] + [s[0]] + [svd_node_edge_list[3]] + [svd_node_edge_list[4]]
+                            r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]] + [Vh[2]]
                         else:
-                            r_edge_order = [svd_node_edge_list[2]] + [svd_node_edge_list[3]] + [s[0]] + [svd_node_edge_list[4]]
-                    node_list.append(tn.contractors.optimal([s, Vh], output_edge_order=r_edge_order))
+                            r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]] + [Vh[2]]
+                    node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
                     
 
         for i in range(len(tidx)):
