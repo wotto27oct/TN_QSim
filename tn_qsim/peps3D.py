@@ -1,13 +1,16 @@
 import numpy as np
+from numpy.core.fromnumeric import reshape
 import tensornetwork as tn
-from tn_qsim.peps import PEPS
+from tn_qsim.general_tn import TensorNetwork
+from tn_qsim.mpo import MPO
 
-class PEPS3D(PEPS):
-    """class of PEPS3D, not implemented yet
+class PEPS3D(TensorNetwork):
+    """class of PEPS3D
 
     physical bond: 0, 1, ..., n-1
-    vertical virtual bond: n, n+1, ..., n+(height+1)-1, n+(height1), ..., n+(height+1)*width-1
-    horizontal virtual bond: n+(height+1)*width, ..., n+(height+1)*width+(width+1)-1, ..., n + (height+1)*height + (height+1)*width-1
+    for initialization:
+        vertical virtual bond: n, n+1, ..., n+(height+1)-1, n+(height1), ..., n+(height+1)*width-1
+        horizontal virtual bond: n+(height+1)*width, ..., n+(height+1)*width+(width+1)-1, ..., n + (height+1)*height + (height+1)*width-1
 
     Attributes:
         width (int) : PEPS width
@@ -15,86 +18,54 @@ class PEPS3D(PEPS):
         n (int) : the number of tensors
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
-        truncate_dim (int) : truncation dim of virtual bond, default None
-        threthold_err (float) : the err threthold of singular values we keep
+        top_nodes (list of tn.Node) : the list of top nodes for each qubits
+        past_nodes (list of tn.Node) : the list of nodes that is not top
     """
 
-    def contract(self):
-        cp_nodes = tn.replicate_nodes(self.nodes)
-        node_list = [node for node in cp_nodes]
-        output_edge_order = []
-        # if there are dangling edges which dimension is 1, contract together
-        def clear_dangling(node, dangling_index):
-            one = tn.Node(np.array([1]))
-            tn.connect(node[dangling_index], one[0])
-            node_list.append(one)
-
-        for w in range(self.width):
-            if cp_nodes[w].get_dimension(1) == 1:
-                clear_dangling(cp_nodes[w], 1)
-            else:
-                output_edge_order.append(cp_nodes[w][1])
-            if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
-                clear_dangling(cp_nodes[self.width*(self.height-1)+w], 3)
-            else:
-                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
+    def __init__(self, tensors, height, width):
+        self.n = len(tensors)
+        self.height = height
+        self.width = width
+        self.path = None
+        edge_info = []
+        buff =2*self.n + (self.height+1)*self.width
         for h in range(self.height):
-            if cp_nodes[h*self.width].get_dimension(4) == 1:
-                clear_dangling(cp_nodes[h*self.width], 4)
-            else:
-                output_edge_order.append(cp_nodes[h*self.width][1])
-            if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
-                clear_dangling(cp_nodes[(h+1)*self.width-1], 2)
-            else:
-                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
+            for w in range(self.width):
+                i = h*self.width + w
+                shape = tensors[i].shape
+                edge_info_original = [i, 2*self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, 2*self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w]
+                reshape_list = [s for s in shape if s != 1]
+                edge_info_list = [edge_info_original[sidx] for sidx in range(5) if shape[sidx] != 1]
+                tensors[i] = tensors[i].reshape(reshape_list)
+                edge_info.append(edge_info_list)
+        super().__init__(edge_info, tensors)
+        self.tree, self.trace_tree = None, None
+        self.top_nodes = [self.nodes[i] for i in range(self.height * self.width)]
+        self.past_nodes = []
 
+    def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """contract PEPS3D and generate full state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            np.array: tensor after contraction
+        """
+        cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+
+        node_list = [node for node in cp_nodes]
+
+        output_edge_order = []
         for i in range(self.n):
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
-        return tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
+            output_edge_order.append(self.top_nodes[i][0])
+
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
     
-    def amplitude(self, tensors):
-        cp_nodes = tn.replicate_nodes(self.nodes)
-        node_list = [node for node in cp_nodes]
-        output_edge_order = []
-        # if there are dangling edges which dimension is 1, contract together
-        def clear_dangling(node, dangling_index):
-            one = tn.Node(np.array([1]))
-            tn.connect(node[dangling_index], one[0])
-            node_list.append(one)
-
-        for w in range(self.width):
-            if cp_nodes[w].get_dimension(1) == 1:
-                clear_dangling(cp_nodes[w], 1)
-            else:
-                output_edge_order.append(cp_nodes[w][1])
-            if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
-                clear_dangling(cp_nodes[self.width*(self.height-1)+w], 3)
-            else:
-                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
-        for h in range(self.height):
-            if cp_nodes[h*self.width].get_dimension(4) == 1:
-                clear_dangling(cp_nodes[h*self.width], 4)
-            else:
-                output_edge_order.append(cp_nodes[h*self.width][1])
-            if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
-                clear_dangling(cp_nodes[(h+1)*self.width-1], 2)
-            else:
-                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
-
-        for i in range(self.n):
-            state = tn.Node(tensors[i])
-            tn.connect(cp_nodes[i][0], state[0])
-            node_list.append(state)
-            for dangling in cp_nodes[i].get_all_dangling():
-                output_edge_order.append(dangling)
-        
-        #opt = ctg.HyperOptimizer(methods="spinglass")
-        #return tn.contractors.custom(node_list, output_edge_order=output_edge_order, optimizer=opt).tensor
-        return tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
-
-
     def apply_MPO(self, tidx, mpo):
         """ apply MPO
         
@@ -103,48 +74,18 @@ class PEPS3D(PEPS):
             mpo (MPO) : MPO tensornetwork.
         """
 
-        def return_dir(diff):
-            if diff == -self.width:
-                return 1
-            elif diff == 1:
-                return 2
-            elif diff == self.width:
-                return 3
-            elif diff == -1:
-                return 4
-            else:
-                raise ValueError("must be applied sequentially")
-
-        edge_list = []
-        node_list = []
-
-        for i, node in enumerate(mpo.nodes):
-            node_contract_list = [node, self.nodes[tidx[i]]]
-            node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 5)]
-            if i == 0:
-                one = tn.Node(np.array([1]))
-                tn.connect(node[2], one[0])
-                node_contract_list.append(one)
-                if i != mpo.n - 1:
-                    node_edge_list.append(node[3])
-            if i == mpo.n - 1:
-                one = tn.Node(np.array([1]))
-                tn.connect(node[3], one[0])
-                node_contract_list.append(one)
-                if i != 0:
-                    node_edge_list.append(node[2])
-            if i != 0 and i != mpo.n-1:
-                node_edge_list = node_edge_list + [node[2], node[3]]
-            
-            tn.connect(node[1], self.nodes[tidx[i]][0])
-            node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
-            edge_list.append(node_edge_list)
-        
-        for i in range(len(tidx)):
-            if i != len(tidx)-1:
-                dir = return_dir(tidx[i+1] - tidx[i]) 
-                edge_list[i][dir] = tn.flatten_edges([edge_list[i][dir], edge_list[i][-1]])
-                edge_list[i+1][(dir+1)%4+1] = edge_list[i][dir]
-            if i != 0 or i != len(tidx)-1:
-                edge_list[i].pop()
-            self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])
+        # single qubit gate
+        if len(tidx) == 0:
+            node = mpo.nodes[0]
+            node_contract_list = [node, self.top_nodes[tidx[0]]]
+            node_edge_list = [node[0]]
+            if len(self.top_nodes[tidx[0]].edges) > 1:
+                node_edge_list = node_edge_list + self.top_nodes[tidx[0]][1:]
+            one = tn.Node(np.array([1]))
+            tn.connect(node[2], one[0])
+            node_contract_list.append(one)
+            one2 = tn.Node(np.array([1]))
+            tn.connect(node[3], one2[0])
+            node_contract_list.append(one2)
+            tn.connect(node[1], self.nodes[tidx[0]][0])
+            self.top_nodes[tidx[0]] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
