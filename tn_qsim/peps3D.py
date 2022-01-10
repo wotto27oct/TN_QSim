@@ -134,5 +134,10 @@ class PEPS3D(TensorNetwork):
                     node_edge_list = [node[e] for e in range(len(node.edges)) if e != 3]
                     node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
                 tn.connect(node[1], self.top_nodes[tidx[i]][0])
-                self.past_nodes.append(self.top_nodes[tidx[i]])
-                self.top_nodes[tidx[i]] = node
+                # if the top tensor is product state, absorb it
+                if len(self.top_nodes[tidx[i]].edges) == 1:
+                    node_edge_list = [node[e] for e in range(len(node.edges)) if e != 1]
+                    self.top_nodes[tidx[i]] = tn.contractors.auto([node, self.top_nodes[tidx[i]]], output_edge_order=node_edge_list)
+                else:
+                    self.past_nodes.append(self.top_nodes[tidx[i]])
+                    self.top_nodes[tidx[i]] = node
