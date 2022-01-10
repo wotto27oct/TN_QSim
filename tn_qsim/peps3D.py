@@ -61,7 +61,7 @@ class PEPS3D(TensorNetwork):
 
         output_edge_order = []
         for i in range(self.n):
-            output_edge_order.append(self.top_nodes[i][0])
+            output_edge_order.append(cp_nodes[-(self.n-i)][0])
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
@@ -73,9 +73,8 @@ class PEPS3D(TensorNetwork):
             tidx (list of int) : list of qubit index we apply to.
             mpo (MPO) : MPO tensornetwork.
         """
-
-        # single qubit gate
-        if len(tidx) == 0:
+        # single qubit gate - contract
+        if len(tidx) == 1:
             node = mpo.nodes[0]
             node_contract_list = [node, self.top_nodes[tidx[0]]]
             node_edge_list = [node[0]]
@@ -87,5 +86,21 @@ class PEPS3D(TensorNetwork):
             one2 = tn.Node(np.array([1]))
             tn.connect(node[3], one2[0])
             node_contract_list.append(one2)
-            tn.connect(node[1], self.nodes[tidx[0]][0])
+            tn.connect(node[1], self.top_nodes[tidx[0]][0])
             self.top_nodes[tidx[0]] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+        else:
+            # multi qubit gate - leave it
+            for i, node in enumerate(mpo.nodes):
+                if i == 0:
+                    one = tn.Node(np.array([1]))
+                    tn.connect(node[2], one[0])
+                    node_edge_list = [node[e] for e in range(len(node.edges)) if e != 2]
+                    node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
+                elif i == mpo.n - 1:
+                    one = tn.Node(np.array([1]))
+                    tn.connect(node[3], one[0])
+                    node_edge_list = [node[e] for e in range(len(node.edges)) if e != 3]
+                    node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
+                tn.connect(node[1], self.top_nodes[tidx[i]][0])
+                self.past_nodes.append(self.top_nodes[tidx[i]])
+                self.top_nodes[tidx[i]] = node

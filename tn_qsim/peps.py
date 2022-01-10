@@ -265,15 +265,23 @@ class PEPS(TensorNetwork):
             
             tn.connect(node[1], self.nodes[tidx[i]][0])
             node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
-            edge_list.append(node_edge_list)
+            #edge_list.append(node_list[-1].edges)
         
         for i in range(len(tidx)):
-            if i != len(tidx)-1:
-                dir = return_dir(tidx[i+1] - tidx[i]) 
-                edge_list[i][dir] = tn.flatten_edges([edge_list[i][dir], edge_list[i][-1]])
-                edge_list[i+1][(dir+1)%4+1] = edge_list[i][dir]
-            if i != 0 or i != len(tidx)-1:
-                edge_list[i].pop()
+            edge_list.append(node_list[i].edges)
+            
+
+        for i in range(len(tidx)-1):
+            dir = return_dir(tidx[i+1] - tidx[i])
+            edge_list[i][dir] = tn.flatten_edges([edge_list[i][dir], edge_list[i][-1]])
+            edge_list[i+1][(dir+1)%4+1] = edge_list[i][dir]
+            edge_list[i].pop()
+            if i != len(tidx)-2:
+                edge_list[i+1].pop(-2)
+            else:
+                edge_list[i+1].pop()
+        
+        for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])
 
     
