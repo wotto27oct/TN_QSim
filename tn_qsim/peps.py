@@ -94,7 +94,7 @@ class PEPS(TensorNetwork):
         """contract amplitude with given product states (typically computational basis)
 
         Args:
-            tensor (list of np.array) : the amplitude index represented by the list of tensor
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
         
         Returns:
             np.array: tensor after contraction
@@ -108,7 +108,7 @@ class PEPS(TensorNetwork):
 
         # contract product state first
         for i in range(self.n):
-            state = tn.Node(tensors[i])
+            state = tn.Node(tensors[i].conj())
             tn.connect(cp_nodes[i][0], state[0])
             edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
             #cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
@@ -137,7 +137,7 @@ class PEPS(TensorNetwork):
 
         # contract product state first
         for i in range(self.n):
-            state = tn.Node(tensors[i])
+            state = tn.Node(tensors[i].conj())
             tn.connect(cp_nodes[i][0], state[0])
             edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
             cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
@@ -185,6 +185,7 @@ class PEPS(TensorNetwork):
             total_fid = total_fid * fid
             
         return mps.contract().flatten()[0]
+    
     
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []

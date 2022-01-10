@@ -43,6 +43,7 @@ class PEPS3D(TensorNetwork):
         self.top_nodes = [self.nodes[i] for i in range(self.height * self.width)]
         self.past_nodes = []
 
+
     def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
         """contract PEPS3D and generate full state
 
@@ -62,6 +63,37 @@ class PEPS3D(TensorNetwork):
         output_edge_order = []
         for i in range(self.n):
             output_edge_order.append(cp_nodes[-(self.n-i)][0])
+
+        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+
+    
+    def amplitude(self, tensors, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """contract amplitude with given product states (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+
+        node_list = [cp_nodes[i] for i in range(len(cp_nodes) - self.n)]
+        output_edge_order = []
+
+        # contract product state first
+        for i in range(self.n):
+            state = tn.Node(tensors[i].conj())
+            tn.connect(cp_nodes[-(self.n-i)][0], state[0])
+            edge_order = [cp_nodes[-(self.n-i)].edges[j] for j in range(1, len(cp_nodes[-(self.n-i)].edges))]
+            node_list.append(tn.contractors.auto([cp_nodes[-(self.n-i)], state], edge_order))
+            cp_nodes[-(self.n-i)].tensor = None
+            state.tensor = None
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
