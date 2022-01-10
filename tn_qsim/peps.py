@@ -325,26 +325,27 @@ class PEPS(TensorNetwork):
                     edge_list.append(node_edge_list)
                 else:
                     tn.connect(node[1], self.nodes[tidx[i]][0])
+
+                    # calc direction  up:1 right:2 down:3 left:4
                     dir = return_dir(tidx[i] - tidx[i-1])
+
+                    # split nodes of PEPS via QR
                     l_l_edges = [node_list[i-1][j] for j in range(0, 5) if j != dir]
                     l_r_edges = [node_list[i-1][dir]] + [node_list[i-1][5]]
-
-                    #print("first QR", node_list[i-1].tensor.shape) 
-                    lU, lVh = tn.split_node_qr(node_list[i-1], l_l_edges, l_r_edges, edge_name="qr_left")
-                    #print("first QR done")
-                    qr_left_edge = lU.get_edge("qr_left")
-                    lU = lU.reorder_edges(l_l_edges + [qr_left_edge])
-                    lVh = lVh.reorder_edges(l_r_edges + [qr_left_edge])
+                    lQ, lR = tn.split_node_qr(node_list[i-1], l_l_edges, l_r_edges, edge_name="qr_left")
+                    qr_left_edge = lQ.get_edge("qr_left")
+                    lQ = lQ.reorder_edges(l_l_edges + [qr_left_edge])
+                    lR = lR.reorder_edges(l_r_edges + [qr_left_edge])
                     r_l_edges = [self.nodes[tidx[i]][0]] + [self.nodes[tidx[i]][(dir+1)%4+1]]
                     r_r_edges = [self.nodes[tidx[i]][j] for j in range(1, 5) if j != (dir+1)%4+1]
-                    #print("second QR", self.nodes[tidx[i]].tensor.shape)
-                    rU, rVh = tn.split_node_qr(self.nodes[tidx[i]], r_l_edges, r_r_edges, edge_name="qr_right")
-                    qr_right_edge = rU.get_edge("qr_right")
-                    #print("second QR done")
-                    rU = rU.reorder_edges(r_l_edges + [qr_right_edge])
-                    rVh = rVh.reorder_edges(r_r_edges + [qr_right_edge])
+                    rR, rQ = tn.split_node_rq(self.nodes[tidx[i]], r_l_edges, r_r_edges, edge_name="qr_right")
+                    qr_right_edge = rR.get_edge("qr_right")
+                    rR = rR.reorder_edges(r_l_edges + [qr_right_edge])
+                    rQ = rQ.reorder_edges(r_r_edges + [qr_right_edge])
+
+                    # contract left_R, right_R, node
                     svd_node_edge_list = None
-                    svd_node_list = [lVh, rU, node]
+                    svd_node_list = [lR, rR, node]
                     if i == mpo.n - 1:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[3], one[0])
@@ -352,21 +353,18 @@ class PEPS(TensorNetwork):
                         svd_node_list.append(one)
                     else:
                         svd_node_edge_list = [qr_left_edge, node[0], node[3], qr_right_edge]
-                    #print("contraction to svd_node")
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
-                    #print("contraction to svd_node done")
 
-                    #print("3rd svd", svd_node.tensor.shape)
+                    # split via SVD for truncation
                     U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
-                    #print("3rd svd done", svd_node.tensor.shape)
-                    l_edge_order = [lU.edges[i] for i in range(0, dir)] + [s[0]] + [lU.edges[i] for i in range(dir, 4)]
-                    node_list[i-1] = tn.contractors.optimal([lU, U], output_edge_order=l_edge_order)
+                    l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 4)]
+                    node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     if i == mpo.n - 1:
-                        r_edge_order = [Vh[1]] + [rVh.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rVh.edges[i] for i in range((dir+1)%4, 3)]
-                        node_list.append(tn.contractors.optimal([s, Vh, rVh], output_edge_order=r_edge_order))
+                        r_edge_order = [Vh[1]] + [rQ.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rQ.edges[i] for i in range((dir+1)%4, 3)]
+                        node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
                     else:
-                        r_edge_order = [Vh[1]] + [rVh.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rVh.edges[i] for i in range((dir+1)%4, 3)] + [Vh[2]]
-                        node_list.append(tn.contractors.optimal([s, Vh, rVh], output_edge_order=r_edge_order))
+                        r_edge_order = [Vh[1]] + [rQ.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rQ.edges[i] for i in range((dir+1)%4, 3)] + [Vh[2]]
+                        node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
