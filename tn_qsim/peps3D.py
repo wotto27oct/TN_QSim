@@ -66,6 +66,50 @@ class PEPS3D(TensorNetwork):
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
+
+    def prepare_amplitude(self, tensors):
+        cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+
+        node_list = [cp_nodes[i] for i in range(len(cp_nodes) - self.n)]
+        output_edge_order = []
+
+        # contract product state first
+        for i in range(self.n):
+            # if tensors[i] is None, leave it open
+            if tensors[i] is None:
+                output_edge_order.append(cp_nodes[-(self.n-i)][0])
+                node_list.append(cp_nodes[-(self.n-i)])
+            else:
+                state = tn.Node(tensors[i].conj())
+                tn.connect(cp_nodes[-(self.n-i)][0], state[0])
+                edge_order = [cp_nodes[-(self.n-i)].edges[j] for j in range(1, len(cp_nodes[-(self.n-i)].edges))]
+                node_list.append(tn.contractors.auto([cp_nodes[-(self.n-i)], state], edge_order))
+                cp_nodes[-(self.n-i)].tensor = None
+                state.tensor = None
+
+        return node_list, output_edge_order
+
+    def find_amplitude_tree(self, tensors, algorithm=None, memory_limit=None, path=None, visualize=False):
+        """contract amplitude with given product states (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_amplitude(tensors)
+
+        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
+        return tree, total_cost, max_sp_cost
+
     
     def amplitude(self, tensors, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
         """contract amplitude with given product states (typically computational basis)
@@ -81,19 +125,8 @@ class PEPS3D(TensorNetwork):
         Returns:
             np.array: tensor after contraction
         """
-        cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
-
-        node_list = [cp_nodes[i] for i in range(len(cp_nodes) - self.n)]
-        output_edge_order = []
-
-        # contract product state first
-        for i in range(self.n):
-            state = tn.Node(tensors[i].conj())
-            tn.connect(cp_nodes[-(self.n-i)][0], state[0])
-            edge_order = [cp_nodes[-(self.n-i)].edges[j] for j in range(1, len(cp_nodes[-(self.n-i)].edges))]
-            node_list.append(tn.contractors.auto([cp_nodes[-(self.n-i)], state], edge_order))
-            cp_nodes[-(self.n-i)].tensor = None
-            state.tensor = None
+        
+        node_list, output_edge_order = self.prepare_amplitude(tensors)
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
