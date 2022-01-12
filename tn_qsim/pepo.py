@@ -271,7 +271,7 @@ class PEPO(TensorNetwork):
 
         Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)
 
-        U, Vh = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize)
+        U, Vh, _ = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize)
         Unode = tn.Node(U)
         Vhnode = tn.Node(Vh)
         tn.connect(Unode[1], Vhnode[0])

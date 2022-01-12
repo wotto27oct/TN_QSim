@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.sparse.linalg.eigen.arpack.arpack import CNEUPD_ERRORS
 import tensornetwork as tn
 from tn_qsim.mpo import MPO
 from tn_qsim.mps import MPS
@@ -377,3 +378,108 @@ class PEPS(TensorNetwork):
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
+
+
+    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, memory_limit=None, visualize=False):
+        """truncate the specified index using FET method
+
+        Args:
+            trun_node_idx (int) : the node index connected to the target edge
+            trun_edge_idx (int) : the target edge's index of the above node
+            truncate_dim (int) : the target bond dimension
+            trial (int) : the number of iterations
+            visualize (bool) : if printing the optimization process or not
+        """
+        for i in range(self.n):
+            self.nodes[i].name = f"node{i}"
+        op_node_idx = 0
+        op_edge_idx = 0
+        if trun_edge_idx == 1:
+            op_node_idx = trun_node_idx - self.width
+            op_edge_idx = 3
+        elif trun_edge_idx == 2:
+            op_node_idx = trun_node_idx + 1
+            op_edge_idx = 4
+        elif trun_edge_idx == 3:
+            op_node_idx = trun_node_idx + self.width
+            op_edge_idx = 1
+        else:
+            op_node_idx = trun_node_idx - 1
+            op_edge_idx = 2
+
+        if truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
+            print("trun_dim already satisfied")
+            return
+
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+        
+        cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
+        cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        edge_i = cp_nodes[trun_node_idx][trun_edge_idx]
+        edge_I = cp_nodes[trun_node_idx+self.n][trun_edge_idx]
+        edge_j = cp_nodes[op_node_idx][op_edge_idx]
+        edge_J = cp_nodes[op_node_idx+self.n][op_edge_idx]
+        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        cp_nodes1, output_edge_order1 = self.__clear_dangling(cp_nodes[:self.n])
+        cp_nodes2, output_edge_order2 = self.__clear_dangling(cp_nodes[self.n:])
+        node_list = [node for node in cp_nodes1 + cp_nodes2]
+
+        Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)
+        # truncate while Fid < threthold
+        if truncate_dim is None:
+            truncate_dim = 1
+        U, Vh, Fid = None, None, 1.0
+        nU, nVh, nFid = None, None, 1.0
+        if threthold is not None:
+            for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
+                nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
+                if nFid < threthold:
+                    truncate_dim = cur_truncate_dim + 1
+                    break
+                U, Vh, Fid = nU, nVh, nFid
+        else:
+            # must be some truncate_dim
+            U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+
+        # if truncation is executed        
+        if U is not None:
+            Unode = tn.Node(U)
+            Vhnode = tn.Node(Vh)
+            tn.connect(Unode[1], Vhnode[0])
+
+            left_edge, right_edge = self.nodes[trun_node_idx][trun_edge_idx].disconnect()
+            if left_edge.node1 != self.nodes[trun_node_idx]:
+                left_edge, right_edge = right_edge, left_edge
+            op_node = self.nodes[op_node_idx]
+
+            # connect self.node[trun_node_idx] and Unode
+            tn.connect(left_edge, Unode[0])
+            node_contract_list = [self.nodes[trun_node_idx], Unode]
+            node_edge_list = []
+            for i in range(5):
+                if i == trun_edge_idx:
+                    node_edge_list.append(Unode[1])
+                else:
+                    node_edge_list.append(self.nodes[trun_node_idx][i])
+            self.nodes[trun_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+            # connect op_node and Vhnode
+            tn.connect(Vhnode[1], right_edge)
+            node_contract_list = [op_node, Vhnode]
+            node_edge_list = []
+            for i in range(5):
+                if i == op_edge_idx:
+                    node_edge_list.append(Vhnode[0])
+                else:
+                    node_edge_list.append(op_node[i])
+            self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+        print(f"truncated from {Gamma.shape[0]} to {truncate_dim}, Fidelity: {Fid}")
+        return Fid

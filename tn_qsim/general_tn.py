@@ -362,9 +362,9 @@ class TensorNetwork():
             U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
             S = np.dot(np.diag(stmp), Vhtmp)
         
-        U = np.dot(U, S)
+        U = np.dot(U, S) / np.sqrt(Fid)
 
-        return U, Vh
+        return U, Vh, Fid
 
 
     def replace_tensors(self, tensor_indexes, r_tensors):
