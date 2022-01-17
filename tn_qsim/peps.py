@@ -39,6 +39,7 @@ class PEPS(TensorNetwork):
         self.truncate_dim = truncate_dim
         self.threthold_err = threthold_err
         self.bmps_truncate_dim = bmps_truncate_dim
+        self.inner_tree = None
 
 
     @property
@@ -186,6 +187,86 @@ class PEPS(TensorNetwork):
             total_fid = total_fid * fid
             
         return mps.contract().flatten()[0]
+
+    
+    def prepare_inner(self):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        output_edge_order = []
+
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        cp_nodes1, output_edge_order1 = self.__clear_dangling(cp_nodes[:self.n])
+        cp_nodes2, output_edge_order2 = self.__clear_dangling(cp_nodes[self.n:])
+        node_list = [node for node in cp_nodes1 + cp_nodes2]
+
+        return node_list, output_edge_order
+
+    
+    def calc_inner(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """calc inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        node_list, output_edge_order = self.prepare_inner()
+
+        if tree is None and path is None:
+            tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit)
+
+        result = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+        return result
+
+
+    def find_inner_tree(self, algorithm=None, memory_limit=None, visualize=False):
+        """find contraction path of inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_inner()
+
+        tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
+        return tree, cost, sp_cost
+
+    
+    def visualize_inner_tree(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """find contraction path of inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_inner()
+
+        if tree is None and path is None:
+            raise ValueError("tree or path is needed for visualization")
+
+        self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
+        return
     
     
     def __clear_dangling(self, cp_nodes):

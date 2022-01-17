@@ -33,6 +33,7 @@ class TensorNetwork():
             raise ValueError("the length of edges and tensors do not correspond")
         self.nodes = []
         self.edges = []
+        self.tree = None
 
         edge_list = dict()
 
@@ -92,7 +93,10 @@ class TensorNetwork():
         if tree == None:
             inputs, output, size_dict = from_nodes_to_str(node_list, output_edge_order)
             tree = ContractionTree.from_path(inputs, output, size_dict, path=path)
-        path = tree.path()
+            print("tree.path: ", tree.path())
+            self.tree = tree
+        if path == None:
+            path = tree.path()
 
         input_sets = [set(node.edges) for node in node_list]
         output_set = set()
@@ -255,6 +259,8 @@ class TensorNetwork():
             else:
                 # if no tree or path is specified, find
                 tree, _, _ = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit)
+        
+        self.tree = tree
            
         if visualize: 
             self.visualize_tree(tree, node_list, output_edge_order, visualize=visualize)
