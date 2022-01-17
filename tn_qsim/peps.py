@@ -460,23 +460,22 @@ class PEPS(TensorNetwork):
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
 
-
-    def find_Gamma_tree(self, trun_node_idx, trun_edge_idx, algorithm=None, memory_limit=None, visualize=False):
-        for i in range(self.n):
-            self.nodes[i].name = f"node{i}"
-        op_node_idx = 0
+    
+    def prepare_Gamma(self, trun_node_idx):
+        trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
+        trun_edge_idx = 0
         op_edge_idx = 0
-        if trun_edge_idx == 1:
-            op_node_idx = trun_node_idx - self.width
+        if trun_node_idx - op_node_idx == self.width:
+            trun_edge_idx = 1
             op_edge_idx = 3
-        elif trun_edge_idx == 2:
-            op_node_idx = trun_node_idx + 1
+        elif trun_node_idx - op_node_idx == -1:
+            trun_edge_idx = 2
             op_edge_idx = 4
-        elif trun_edge_idx == 3:
-            op_node_idx = trun_node_idx + self.width
+        elif trun_node_idx - op_node_idx == -self.width:
+            trun_edge_idx = 3
             op_edge_idx = 1
         else:
-            op_node_idx = trun_node_idx - 1
+            trun_edge_idx = 4
             op_edge_idx = 2
 
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -499,10 +498,27 @@ class PEPS(TensorNetwork):
         cp_nodes2, output_edge_order2 = self.__clear_dangling(cp_nodes[self.n:])
         node_list = [node for node in cp_nodes1 + cp_nodes2]
 
-        tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit)
+        return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order
+
+
+    def find_Gamma_tree(self, trun_node_idx, algorithm=None, memory_limit=None, visualize=False):
+        """find contraction tree of Gamma
+
+        Args:
+            trun_node_idx (list ofint) : the node index connected to the target edge
+            truncate_dim (int) : the target bond dimension
+            trial (int) : the number of iterations
+            visualize (bool) : if printing the optimization process or not
+        """
+        for i in range(self.n):
+            self.nodes[i].name = f"node{i}"
+        
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
+
+        tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
         return tree, cost, sp_cost
 
-    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, memory_limit=None, visualize=False):
+    def find_optimal_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, memory_limit=None, visualize=False):
         """truncate the specified index using FET method
 
         Args:
@@ -514,44 +530,12 @@ class PEPS(TensorNetwork):
         """
         for i in range(self.n):
             self.nodes[i].name = f"node{i}"
-        op_node_idx = 0
-        op_edge_idx = 0
-        if trun_edge_idx == 1:
-            op_node_idx = trun_node_idx - self.width
-            op_edge_idx = 3
-        elif trun_edge_idx == 2:
-            op_node_idx = trun_node_idx + 1
-            op_edge_idx = 4
-        elif trun_edge_idx == 3:
-            op_node_idx = trun_node_idx + self.width
-            op_edge_idx = 1
-        else:
-            op_node_idx = trun_node_idx - 1
-            op_edge_idx = 2
+
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
 
         if truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
             print("trun_dim already satisfied")
             return
-
-        cp_nodes = tn.replicate_nodes(self.nodes)
-        cp_nodes.extend(tn.replicate_nodes(self.nodes))
-
-        for i in range(self.n):
-            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
-            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
-        
-        cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
-        cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
-        edge_i = cp_nodes[trun_node_idx][trun_edge_idx]
-        edge_I = cp_nodes[trun_node_idx+self.n][trun_edge_idx]
-        edge_j = cp_nodes[op_node_idx][op_edge_idx]
-        edge_J = cp_nodes[op_node_idx+self.n][op_edge_idx]
-        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
-
-        # if there are dangling edges which dimension is 1, contract first (including inner dim)
-        cp_nodes1, output_edge_order1 = self.__clear_dangling(cp_nodes[:self.n])
-        cp_nodes2, output_edge_order2 = self.__clear_dangling(cp_nodes[self.n:])
-        node_list = [node for node in cp_nodes1 + cp_nodes2]
 
         Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)
         # truncate while Fid < threthold
