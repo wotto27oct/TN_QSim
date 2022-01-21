@@ -1,5 +1,6 @@
 import opt_einsum as oe
 import tensornetwork as tn
+import quimb.tensor as qtn
 
 def from_nodes_to_str(node_list, output_edge_order):
     input_sets = [set(node.edges) for node in node_list]
@@ -39,3 +40,13 @@ def from_nodes_to_str(node_list, output_edge_order):
         output_alpha = str
     
     return input_alpha, output_alpha, edge_alpha_dims
+
+
+def from_tn_to_quimb(node_list, output_edge_order):
+    input_alpha, output_alpha, edge_alpha_dims = from_nodes_to_str(node_list, output_edge_order)
+    tensors = []
+    for idx, node in enumerate(node_list):
+        tensors.append(qtn.Tensor(data=node.tensor, inds=list(input_alpha[idx])))
+        node.tensor = None
+    tn = qtn.TensorNetwork(tensors)
+    return tn

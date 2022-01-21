@@ -10,6 +10,8 @@ from tn_qsim.utils import from_nodes_to_str
 import jax
 from concurrent.futures import ThreadPoolExecutor
 from jax.interpreters import xla
+import numba
+import functools
 
 class TensorNetwork():
     """base class of Tensor Network
@@ -235,6 +237,65 @@ class TensorNetwork():
         einsum_str_list, contract_einsum_str_list, edge_alpha_dims, cost_list, total_cost, sp_cost_list, max_sp_cost = self.visualize_tree(tree, node_list, output_edge_order, visualize=visualize)
 
         return tree, total_cost, max_sp_cost
+
+
+    def find_contract_tree_by_quimb(self, tn, algorithm=None):
+        #numba.set_num_threads(1)
+        #tn.draw()
+        tn.full_simplify_("ADCRS")
+        #tn.draw()
+
+        tree = tn.contraction_tree(optimize=algorithm)
+        return tree, tn
+
+
+    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, target_size=2**29):   
+        """execute contraction for given input and algorithm or tree
+
+        Args:
+            tn (quimb.tensor.TensorNetwork) : tn we contract by quimb
+            algorithm : the algorithm to find contraction path
+            target_size : the target size we slice
+            
+        
+        Returns:
+            np.array: the tensor after contraction
+        """
+
+        if tree is None:
+            tree, tn = self.find_contract_tree_by_quimb(tn, algorithm)
+        tree_s = tree.slice(target_size=target_size)
+
+        print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} sliced_inds: {tree_s.sliced_inds}")
+
+
+        if tree_s.total_flops() > 1e10:
+            arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
+            # use jax to use jit and GPU
+            pool = ThreadPoolExecutor(1)
+
+            contract_core_jit = jax.jit(functools.partial(tree_s.contract_core, backend="jax"))
+
+            fs = [
+                pool.submit(contract_core_jit, tree_s.slice_arrays(arrays, i))
+                for i in range(tree_s.nslices)
+            ]
+
+            slices = (np.array(f.result()) for f in fs)
+
+            x = tree_s.gather_slices(slices, progbar=True)
+            return x
+        
+        else:
+            arrays = [tensor.data for tensor in tn.tensors]
+            results = [
+                tree_s.contract_slice(arrays, i)
+                for i in range(tree_s.nslices)
+            ]
+
+            result = tree_s.gather_slices(results)
+            #xla._xla_callable.cache_clear()
+            return result
 
 
     def contract_tree(self, node_list, output_edge_order=None, algorithm=None, memory_limit=2**28, tree=None, path=None, visualize=False):   

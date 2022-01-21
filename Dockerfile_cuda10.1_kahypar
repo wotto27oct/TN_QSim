@@ -1,7 +1,6 @@
-FROM nvidia/cuda:11.4.2-cudnn8-devel-ubuntu18.04
+FROM nvidia/cuda:10.1-cudnn7-devel-ubuntu18.04
 
-RUN echo 'nameserver 8.8.8.8' >> /etc/resolv.conf && \
-    apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y \
         python3-pip \
         libffi-dev \
         vim \
@@ -11,9 +10,9 @@ RUN echo 'nameserver 8.8.8.8' >> /etc/resolv.conf && \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --upgrade pip
-RUN pip3 install --upgrade jax[cuda11_cudnn82] jaxlib[cuda11_cudnn82] -f https://storage.googleapis.com/jax-releases/jax_releases.html
+RUN pip3 install --upgrade jax jaxlib==0.1.69+cuda101 -f https://storage.googleapis.com/jax-releases/jax_releases.html
 RUN pip3 install tensorflow
-RUN pip3 install cupy-cuda114
+RUN pip3 install cupy-cuda101
 RUN pip3 install scikit-learn
 RUN pip3 install matplotlib networkx
 RUN pip3 install pandas

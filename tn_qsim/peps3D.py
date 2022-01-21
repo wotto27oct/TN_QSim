@@ -3,6 +3,7 @@ from numpy.core.fromnumeric import reshape
 import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
 from tn_qsim.mpo import MPO
+from tn_qsim.utils import from_tn_to_quimb
 
 class PEPS3D(TensorNetwork):
     """class of PEPS3D
@@ -129,6 +130,45 @@ class PEPS3D(TensorNetwork):
         node_list, output_edge_order = self.prepare_amplitude(tensors)
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+    
+
+    def find_amplitude_tree_by_quimb(self, tensors, algorithm=None, visualize=False):
+        """contract amplitude with given product states by using quimb (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        node_list, output_edge_order = self.prepare_amplitude(tensors)
+
+        tn = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, algorithm)
+
+    
+    def amplitude_by_quimb(self, tensors, algorithm=None, tree=None, target_size=None):
+        """contract amplitude with given product states by using quimb (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        node_list, output_edge_order = self.prepare_amplitude(tensors)
+
+        tn = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size)
 
     
     def apply_MPO(self, tidx, mpo):
