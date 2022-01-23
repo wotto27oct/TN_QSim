@@ -266,7 +266,7 @@ class TensorNetwork():
             tree, tn = self.find_contract_tree_by_quimb(tn, algorithm)
         tree_s = tree.slice(target_size=target_size)
 
-        print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} sliced_inds: {tree_s.sliced_inds}")
+        print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} nslice: {tree_s.nslices}")
 
 
         if gpu and tree_s.total_flops() > 1e7:
