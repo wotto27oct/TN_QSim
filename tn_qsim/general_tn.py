@@ -249,7 +249,7 @@ class TensorNetwork():
         return tree, tn
 
 
-    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, target_size=2**29):   
+    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, target_size=2**29, gpu=True):   
         """execute contraction for given input and algorithm or tree
 
         Args:
@@ -269,7 +269,7 @@ class TensorNetwork():
         print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} sliced_inds: {tree_s.sliced_inds}")
 
 
-        if tree_s.total_flops() > 1e10:
+        if gpu and tree_s.total_flops() > 1e7:
             arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
             # use jax to use jit and GPU
             pool = ThreadPoolExecutor(1)
@@ -285,7 +285,6 @@ class TensorNetwork():
 
             x = tree_s.gather_slices(slices, progbar=True)
             return x
-        
         else:
             arrays = [tensor.data for tensor in tn.tensors]
             results = [
