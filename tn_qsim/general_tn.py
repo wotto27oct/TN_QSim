@@ -239,17 +239,14 @@ class TensorNetwork():
         return tree, total_cost, max_sp_cost
 
 
-    def find_contract_tree_by_quimb(self, tn, algorithm=None):
-        #numba.set_num_threads(1)
-        #tn.draw()
-        tn.full_simplify_("ADCRS")
-        #tn.draw()
+    def find_contract_tree_by_quimb(self, tn, algorithm=None, seq="ADCRS"):
+        tn.full_simplify_(seq)
 
         tree = tn.contraction_tree(optimize=algorithm)
-        return tree, tn
+        return tn, tree
 
 
-    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, target_size=2**29, gpu=True):   
+    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):   
         """execute contraction for given input and algorithm or tree
 
         Args:
@@ -263,8 +260,10 @@ class TensorNetwork():
         """
 
         if tree is None:
-            tree, tn = self.find_contract_tree_by_quimb(tn, algorithm)
-        tree_s = tree.slice(target_size=target_size)
+            tn, tree = self.find_contract_tree_by_quimb(tn, algorithm, seq)
+        tree_s = tree
+        if target_size is not None:
+            tree_s = tree.slice(target_size=target_size)
 
         print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} nslice: {tree_s.nslices}")
 
@@ -286,15 +285,27 @@ class TensorNetwork():
             x = tree_s.gather_slices(slices, progbar=True)
             return x
         else:
-            arrays = [tensor.data for tensor in tn.tensors]
-            results = [
-                tree_s.contract_slice(arrays, i)
-                for i in range(tree_s.nslices)
-            ]
+            arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
+            # use jax to use jit
+            contract_core_jit = jax.jit(functools.partial(tree_s.contract_core, backend="jax"), backend="cpu")
+            
+            slices = []
 
-            result = tree_s.gather_slices(results)
-            #xla._xla_callable.cache_clear()
-            return result
+            for t in range(0, tree_s.nslices, thread):
+                print(f"{t}th parallel")
+                end_thread = tree_s.nslices if tree_s.nslices < (t+1)*thread else (t+1)*thread
+                #pool = ThreadPoolExecutor(end_thread - t*thread) if tree_s.nslices < (t+1)*thread else ThreadPoolExecutor(thread)
+                pool = ThreadPoolExecutor(1)
+
+                fs = [
+                    pool.submit(contract_core_jit, tree_s.slice_arrays(arrays, i))
+                    for i in range(t*thread, end_thread)
+                ]
+
+                slices = slices + [np.array(f.result()) for f in fs]
+
+            x = tree_s.gather_slices(slices, progbar=True)
+            return x
 
 
     def contract_tree(self, node_list, output_edge_order=None, algorithm=None, memory_limit=2**28, tree=None, path=None, visualize=False):   

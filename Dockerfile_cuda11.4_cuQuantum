@@ -1,0 +1,24 @@
+FROM nvidia/cuda:11.4.2-cudnn8-devel-ubuntu18.04
+
+RUN echo 'nameserver 8.8.8.8' >> /etc/resolv.conf && \
+    apt-get update && apt-get install -y \
+        python3-pip \
+        libffi-dev \
+        vim \
+        tmux \
+        git \
+    &&  apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN echo 'nameserver 8.8.8.8' >> /etc/resolv.conf &&  \
+    pip3 install --upgrade pip
+RUN echo 'nameserver 8.8.8.8' >> /etc/resolv.conf &&  \
+    pip3 install --upgrade jax[cuda11_cudnn82] jaxlib[cuda11_cudnn82] -f https://storage.googleapis.com/jax-releases/jax_releases.html
+RUN echo 'nameserver 8.8.8.8' >> /etc/resolv.conf &&  \
+    pip3 install tensorflow cupy-cuda114 scikit-learn matplotlib networkx pandas tensornetwork opt_einsum kahypar tqdm optuna autoray nevergrad scikit-optimize numba cytoolz psutil
+
+ENV CUDA_VISIBLE_DEVICES 0
+ENV XLA_PYTHON_CLIENT_PREALLOCATE false
+
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D"]

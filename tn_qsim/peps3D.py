@@ -132,7 +132,7 @@ class PEPS3D(TensorNetwork):
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
     
 
-    def find_amplitude_tree_by_quimb(self, tensors, algorithm=None, visualize=False):
+    def find_amplitude_tree_by_quimb(self, tensors, algorithm=None, seq="ADCRS", visualize=False):
         """contract amplitude with given product states by using quimb (typically computational basis)
 
         Args:
@@ -150,10 +150,10 @@ class PEPS3D(TensorNetwork):
         if visualize:
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
 
-        return self.find_contract_tree_by_quimb(tn, algorithm)
+        return self.find_contract_tree_by_quimb(tn, algorithm, seq)
 
     
-    def amplitude_by_quimb(self, tensors, algorithm=None, tree=None, target_size=None, gpu=True):
+    def amplitude_by_quimb(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
         """contract amplitude with given product states by using quimb (typically computational basis)
 
         Args:
@@ -164,11 +164,11 @@ class PEPS3D(TensorNetwork):
             np.array: tensor after contraction
         """
         
-        node_list, output_edge_order = self.prepare_amplitude(tensors)
+        if tn is None:
+            node_list, output_edge_order = self.prepare_amplitude(tensors)
+            tn = from_tn_to_quimb(node_list, output_edge_order)
 
-        tn = from_tn_to_quimb(node_list, output_edge_order)
-
-        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size, gpu)
+        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size, gpu, thread, seq)
 
     
     def apply_MPO(self, tidx, mpo):
