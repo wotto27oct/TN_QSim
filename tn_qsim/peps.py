@@ -518,12 +518,12 @@ class PEPS(TensorNetwork):
         tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
         return tree, cost, sp_cost
 
+
     def find_optimal_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, memory_limit=None, visualize=False):
         """truncate the specified index using FET method
 
         Args:
             trun_node_idx (int) : the node index connected to the target edge
-            trun_edge_idx (int) : the target edge's index of the above node
             truncate_dim (int) : the target bond dimension
             trial (int) : the number of iterations
             visualize (bool) : if printing the optimization process or not

@@ -2,6 +2,7 @@ import numpy as np
 import opt_einsum as oe
 import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
+from tn_qsim.utils import from_tn_to_quimb
 
 class PEPDO(TensorNetwork):
     """class of PEPDO
@@ -117,7 +118,7 @@ class PEPDO(TensorNetwork):
         return node_list, output_edge_order
 
     
-    def calc_trace(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+    def calc_trace(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
         """contract PEPDO and generate trace of full density operator
 
         Args:
@@ -130,15 +131,14 @@ class PEPDO(TensorNetwork):
             np.array: tensor after contraction
         """
         
-        node_list, output_edge_order = self.prepare_trace()
+        if tn is None:
+            node_list, output_edge_order = self.prepare_trace()
+            tn = from_tn_to_quimb(node_list, output_edge_order)
         
-        if tree == None and path == None and self.trace_tree is not None:
-            tree = self.trace_tree
-        
-        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size, gpu, thread, seq)
 
 
-    def find_trace_tree(self, algorithm=None, memory_limit=None, visualize=False):
+    def find_trace_tree(self, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction tree of the trace of the PEPDO
 
         Args:
@@ -153,9 +153,11 @@ class PEPDO(TensorNetwork):
 
         node_list, output_edge_order = self.prepare_trace()
 
-        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        self.trace_tree = tree
-        return tree, total_cost, max_sp_cost
+        tn = from_tn_to_quimb(node_list, output_edge_order)
+
+        tn, tree = self.find_contract_tree_by_quimb(tn, algorithm, seq, visualize)
+
+        return tn, tree
 
     
     def __clear_dangling(self, cp_nodes):
@@ -271,37 +273,23 @@ class PEPDO(TensorNetwork):
             self.nodes[tidx[i]] = node_list[i]
 
     
-    def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, trials=10, algorithm=None, memory_limit=None, visualize=False):
-        """truncate the specified index using FET method
-
-        Args:
-            trun_node_idx (int) : the node index connected to the target edge
-            trun_edge_idx (int) : the target edge's index of the above node
-            truncate_dim (int) : the target bond dimension
-            trial (int) : the number of iterations
-            visualize (bool) : if printing the optimization process or not
-        """
-        for i in range(self.n):
-            self.nodes[i].name = f"node{i}"
-        op_node_idx = 0
+    def prepare_Gamma(self, trun_node_idx):
+        trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
+        trun_edge_idx = 0
         op_edge_idx = 0
-        if trun_edge_idx == 1:
-            op_node_idx = trun_node_idx - self.width
+        if trun_node_idx - op_node_idx == self.width:
+            trun_edge_idx = 1
             op_edge_idx = 3
-        elif trun_edge_idx == 2:
-            op_node_idx = trun_node_idx + 1
+        elif trun_node_idx - op_node_idx == -1:
+            trun_edge_idx = 2
             op_edge_idx = 4
-        elif trun_edge_idx == 3:
-            op_node_idx = trun_node_idx + self.width
+        elif trun_node_idx - op_node_idx == -self.width:
+            trun_edge_idx = 3
             op_edge_idx = 1
         else:
-            op_node_idx = trun_node_idx - 1
+            trun_edge_idx = 4
             op_edge_idx = 2
-
-        if self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
-            print("trun_dim already satisfied")
-            return
-
+        
         cp_nodes = tn.replicate_nodes(self.nodes)
         cp_nodes.extend(tn.replicate_nodes(self.nodes))
         for i in range(self.n):
@@ -320,14 +308,113 @@ class PEPDO(TensorNetwork):
 
         # if there are dangling edges which dimension is 1, contract first (including inner dim)
         cp_nodes, output_edge_order1 = self.__clear_dangling(cp_nodes)
-        # crear all othre output_edge
+        # crear all other output_edge
         for i in range(len(output_edge_order1)//2):
             tn.connect(output_edge_order1[i], output_edge_order1[i+len(output_edge_order1)//2])
         node_list = [node for node in cp_nodes]
 
-        Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)        
+        return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order
 
-        U, Vh, _ = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+
+    def find_Gamma_tree(self, trun_node_idx, algorithm=None, seq="ADCRS", visualize=False):
+        """find contraction tree of Gamma
+
+        Args:
+            trun_node_idx (list ofint) : the node index connected to the target edge
+            truncate_dim (int) : the target bond dimension
+            trial (int) : the number of iterations
+            visualize (bool) : if printing the optimization process or not
+        """
+        for i in range(self.n):
+            self.nodes[i].name = f"node{i}"
+        
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
+
+        if self.nodes[trun_node_idx][trun_edge_idx].dimension == 1:
+            return None, None
+
+        tn = from_tn_to_quimb(node_list, output_edge_order)
+        tn, tree = self.find_contract_tree_by_quimb(tn, algorithm, seq, visualize)
+
+        return tn, tree
+
+
+    def find_optimal_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
+        """truncate the specified index using FET method
+
+        Args:
+            trun_node_idx (list of int) : the node index that we truncate
+            truncate_dim (int) : the target bond dimension
+            threthold (float) : the truncation threthold
+            trials (int) : the number of iterations
+            visualize (bool) : if printing the optimization process or not
+        """
+        for i in range(self.n):
+            self.nodes[i].name = f"node{i}"
+
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
+        
+        if truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
+            print("trun_dim already satisfied")
+            return
+
+        if tnq is None:
+            node_list, output_edge_order = self.prepare_trace()
+            tnq = from_tn_to_quimb(node_list, output_edge_order)
+
+        Gamma = self.contract_tree_by_quimb(tnq, algorithm, tree, target_size, gpu, thread, seq)
+
+        if truncate_dim is None:
+            truncate_dim = 1
+        U, Vh, Fid = None, None, 1.0
+        nU, nVh, nFid = None, None, 1.0
+        if threthold is not None:
+            for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
+                nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
+                if nFid < threthold:
+                    truncate_dim = cur_truncate_dim + 1
+                    break
+                U, Vh, Fid = nU, nVh, nFid
+        else:
+            # must be some truncate_dim
+            U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+    
+        # if truncation is executed        
+        if U is not None:
+            Unode = tn.Node(U)
+            Vhnode = tn.Node(Vh)
+            tn.connect(Unode[1], Vhnode[0])
+
+            left_edge, right_edge = self.nodes[trun_node_idx][trun_edge_idx].disconnect()
+            if left_edge.node1 != self.nodes[trun_node_idx]:
+                left_edge, right_edge = right_edge, left_edge
+            op_node = self.nodes[op_node_idx]
+
+            # connect self.node[trun_node_idx] and Unode
+            tn.connect(left_edge, Unode[0])
+            node_contract_list = [self.nodes[trun_node_idx], Unode]
+            node_edge_list = []
+            for i in range(6):
+                if i == trun_edge_idx:
+                    node_edge_list.append(Unode[1])
+                else:
+                    node_edge_list.append(self.nodes[trun_node_idx][i])
+            self.nodes[trun_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+            # connect op_node and Vhnode
+            tn.connect(Vhnode[1], right_edge)
+            node_contract_list = [op_node, Vhnode]
+            node_edge_list = []
+            for i in range(6):
+                if i == op_edge_idx:
+                    node_edge_list.append(Vhnode[0])
+                else:
+                    node_edge_list.append(op_node[i])
+            self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+        print(f"truncated from {Gamma.shape[0]} to {truncate_dim}, Fidelity: {Fid}")
+        return Fid
+        """U, Vh, _ = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
         Unode = tn.Node(U)
         Vhnode = tn.Node(Vh)
         tn.connect(Unode[1], Vhnode[0])
@@ -359,4 +446,4 @@ class PEPDO(TensorNetwork):
                 node_edge_list.append(op_node[i])
         self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
 
-        print(f"truncated from {U.shape[0]} to {truncate_dim}")
+        print(f"truncated from {U.shape[0]} to {truncate_dim}")"""

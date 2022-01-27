@@ -150,10 +150,10 @@ class PEPS3D(TensorNetwork):
         if visualize:
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
 
-        return self.find_contract_tree_by_quimb(tn, algorithm, seq)
+        return self.find_contract_tree_by_quimb(tn, algorithm, seq="ADCRS")
 
     
-    def amplitude_by_quimb(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
+    def amplitude_by_quimb(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """contract amplitude with given product states by using quimb (typically computational basis)
 
         Args:

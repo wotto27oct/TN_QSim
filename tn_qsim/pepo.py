@@ -2,6 +2,7 @@ import numpy as np
 import opt_einsum as oe
 import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
+from tn_qsim.utils import from_tn_to_quimb
 
 class PEPO(TensorNetwork):
     """class of PEPDO
@@ -175,7 +176,7 @@ class PEPO(TensorNetwork):
         return node_list, output_edge_order
 
     
-    def find_pepo_trace_tree(self, pepo, algorithm=None, memory_limit=None, visualize=False):
+    def find_pepo_trace_tree(self, pepo, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction tree of the pepo_trace of the PEPO
 
         Args:
@@ -190,12 +191,14 @@ class PEPO(TensorNetwork):
         """
 
         node_list, output_edge_order = self.prepare_pepo_trace(pepo)
-        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        self.pepo_trace_tree = tree
-        return tree, total_cost, max_sp_cost
+        tn = from_tn_to_quimb(node_list, output_edge_order)
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, algorithm, seq, visualize)
 
 
-    def calc_pepo_trace(self, pepo, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+    def calc_pepo_trace(self, pepo, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
         """calc product with pepo and trace out full density operator
 
         Args:
@@ -208,11 +211,11 @@ class PEPO(TensorNetwork):
             np.array: tensor after contraction
         """
 
-        node_list, output_edge_order = self.prepare_pepo_trace(pepo)
-        if tree == None and path == None and self.pepo_trace_tree is not None:
-            tree = self.pepo_trace_tree
+        if tn is None:
+            node_list, output_edge_order = self.prepare_pepo_trace(pepo)
+            tn = from_tn_to_quimb(node_list, output_edge_order)
         
-        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size, gpu, thread, seq)
     
 
     def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, trials=10, algorithm=None, memory_limit=None, visualize=False):

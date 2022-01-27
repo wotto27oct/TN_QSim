@@ -49,4 +49,6 @@ def from_tn_to_quimb(node_list, output_edge_order):
         tensors.append(qtn.Tensor(data=node.tensor, inds=list(input_alpha[idx])))
         node.tensor = None
     tn = qtn.TensorNetwork(tensors)
+    #print(output_alpha)
+    #tn._outer_inds = "".join(output_alpha)
     return tn
