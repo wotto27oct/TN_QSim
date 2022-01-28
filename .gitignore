@@ -24,3 +24,10 @@ ctg*
 GRCS
 quimb
 surface*
+*.deb
+hello*
+CUDA*
+libcu*
+cutensor*.py
+cuquantum*
+cuQuantum*

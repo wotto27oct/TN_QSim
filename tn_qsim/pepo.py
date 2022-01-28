@@ -191,11 +191,8 @@ class PEPO(TensorNetwork):
         """
 
         node_list, output_edge_order = self.prepare_pepo_trace(pepo)
-        tn = from_tn_to_quimb(node_list, output_edge_order)
-        if visualize:
-            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
-
-        return self.find_contract_tree_by_quimb(tn, algorithm, seq, visualize)
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        return self.find_contract_tree_by_quimb(tn, output_inds=output_inds, algorithm=algorithm, seq=seq, visualize=visualize)
 
 
     def calc_pepo_trace(self, pepo, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
@@ -211,11 +208,12 @@ class PEPO(TensorNetwork):
             np.array: tensor after contraction
         """
 
+        output_inds = None
         if tn is None:
             node_list, output_edge_order = self.prepare_pepo_trace(pepo)
-            tn = from_tn_to_quimb(node_list, output_edge_order)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
         
-        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size, gpu, thread, seq)
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
     
 
     def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, trials=10, algorithm=None, memory_limit=None, visualize=False):

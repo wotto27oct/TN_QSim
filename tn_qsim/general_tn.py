@@ -239,7 +239,7 @@ class TensorNetwork():
         return tree, total_cost, max_sp_cost
 
 
-    def find_contract_tree_by_quimb(self, tn, algorithm=None, seq="ADCRS", visualize=False):
+    def find_contract_tree_by_quimb(self, tn, output_inds, algorithm=None, seq="ADCRS", visualize=False):
         #print(tn.get_equation())
         #print(tn.inner_inds())
         #print(tn.tensors[0].inds)
@@ -248,11 +248,10 @@ class TensorNetwork():
         if visualize:
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
             #tn.draw()
-        tn = tn.full_simplify(seq)
+        tn = tn.full_simplify(seq, output_inds=output_inds)
         #print(tn.get_equation())
         #print(tn.inner_inds())
         #print(tn.outer_inds())
-        #tn.draw()
         if len(tn.tensors) == 1:
             if visualize:
                 print("tensor network becomes scalar after simplification")
@@ -261,19 +260,19 @@ class TensorNetwork():
             tree._flops = 1.0
             tree.sliced_inds = ""
             return tn, tree
-        tree = tn.contraction_tree(optimize=algorithm)        
+        tree = tn.contraction_tree(optimize=algorithm, output_inds=output_inds)        
         if visualize:
-            #tn.draw()
             print(f"after simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
-            print(f"slice: {tree.sliced_inds} tree cost: {tree.total_flops():,}, sp_cost: {tree.max_size():,}, log2_FLOP: {np.log2(tree.total_flops()):.4g} tree_width: {tree.contraction_width()}")
+            print(f"slice: {tree.sliced_inds} tree cost: {tree.total_flops():,}, sp_cost: {tree.max_size():,}, log2_FLOP: {np.log2(tree.total_flops()):.4g} tree_width: {tree.contraction_width()}".encode("utf-8").strip())
         return tn, tree
 
 
-    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", is_visualize=False):   
+    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, output_inds=None, target_size=None, gpu=True, thread=1, seq="ADCRS", is_visualize=False):   
         """execute contraction for given input and algorithm or tree
 
         Args:
             tn (quimb.tensor.TensorNetwork) : tn we contract by quimb
+            output_inds (str) : output index ordering, if tree == None
             algorithm : the algorithm to find contraction path
             target_size : the target size we slice
             
@@ -283,7 +282,7 @@ class TensorNetwork():
         """
 
         if tree is None:
-            tn, tree = self.find_contract_tree_by_quimb(tn, algorithm, seq)
+            tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq)
         if len(tn.tensors) == 1:
             return tn.tensors[0].data
         tree_s = tree
@@ -464,6 +463,12 @@ class TensorNetwork():
 
             U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
             S = np.dot(np.diag(stmp), Vhtmp)
+        
+        R = oe.contract("pq,qj->pj",S,Vh).flatten()
+        P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+        A = oe.contract("a,b->ab",P,P.conj())
+        B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+        Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
         
         U = np.dot(U, S) / np.sqrt(Fid)
 

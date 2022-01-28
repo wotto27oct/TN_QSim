@@ -131,11 +131,12 @@ class PEPDO(TensorNetwork):
             np.array: tensor after contraction
         """
         
+        output_inds = None
         if tn is None:
             node_list, output_edge_order = self.prepare_trace()
-            tn = from_tn_to_quimb(node_list, output_edge_order)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
         
-        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size, gpu, thread, seq)
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
 
     def find_trace_tree(self, algorithm=None, seq="ADCRS", visualize=False):
@@ -153,9 +154,9 @@ class PEPDO(TensorNetwork):
 
         node_list, output_edge_order = self.prepare_trace()
 
-        tn = from_tn_to_quimb(node_list, output_edge_order)
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
 
-        tn, tree = self.find_contract_tree_by_quimb(tn, algorithm, seq, visualize)
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
 
         return tn, tree
 
@@ -333,8 +334,8 @@ class PEPDO(TensorNetwork):
         if self.nodes[trun_node_idx][trun_edge_idx].dimension == 1:
             return None, None
 
-        tn = from_tn_to_quimb(node_list, output_edge_order)
-        tn, tree = self.find_contract_tree_by_quimb(tn, algorithm, seq, visualize)
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
 
         return tn, tree
 
@@ -356,13 +357,14 @@ class PEPDO(TensorNetwork):
         
         if truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
             print("trun_dim already satisfied")
-            return
+            return 1.0
 
+        # includes tree == None case
+        output_inds = None
         if tnq is None:
-            node_list, output_edge_order = self.prepare_trace()
-            tnq = from_tn_to_quimb(node_list, output_edge_order)
+            tnq, output_inds = from_tn_to_quimb(node_list, output_edge_order)
 
-        Gamma = self.contract_tree_by_quimb(tnq, algorithm, tree, target_size, gpu, thread, seq)
+        Gamma = self.contract_tree_by_quimb(tnq, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
         if truncate_dim is None:
             truncate_dim = 1
@@ -378,6 +380,10 @@ class PEPDO(TensorNetwork):
         else:
             # must be some truncate_dim
             U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+
+
+        old_trun = self.nodes[trun_node_idx].tensor
+        old_op = self.nodes[op_node_idx].tensor
     
         # if truncation is executed        
         if U is not None:
@@ -414,36 +420,3 @@ class PEPDO(TensorNetwork):
 
         print(f"truncated from {Gamma.shape[0]} to {truncate_dim}, Fidelity: {Fid}")
         return Fid
-        """U, Vh, _ = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
-        Unode = tn.Node(U)
-        Vhnode = tn.Node(Vh)
-        tn.connect(Unode[1], Vhnode[0])
-
-        left_edge, right_edge = self.nodes[trun_node_idx][trun_edge_idx].disconnect()
-        if left_edge.node1 != self.nodes[trun_node_idx]:
-            left_edge, right_edge = right_edge, left_edge
-        op_node = self.nodes[op_node_idx]
-
-        # connect self.node[trun_node_idx] and Unode
-        tn.connect(left_edge, Unode[0])
-        node_contract_list = [self.nodes[trun_node_idx], Unode]
-        node_edge_list = []
-        for i in range(6):
-            if i == trun_edge_idx:
-                node_edge_list.append(Unode[1])
-            else:
-                node_edge_list.append(self.nodes[trun_node_idx][i])
-        self.nodes[trun_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
-
-        # connect op_node and Vhnode
-        tn.connect(Vhnode[1], right_edge)
-        node_contract_list = [op_node, Vhnode]
-        node_edge_list = []
-        for i in range(6):
-            if i == op_edge_idx:
-                node_edge_list.append(Vhnode[0])
-            else:
-                node_edge_list.append(op_node[i])
-        self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
-
-        print(f"truncated from {U.shape[0]} to {truncate_dim}")"""

@@ -145,12 +145,12 @@ class PEPS3D(TensorNetwork):
         
         node_list, output_edge_order = self.prepare_amplitude(tensors)
 
-        tn = from_tn_to_quimb(node_list, output_edge_order)
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
 
         if visualize:
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
 
-        return self.find_contract_tree_by_quimb(tn, algorithm, seq="ADCRS")
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
 
     
     def amplitude_by_quimb(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
