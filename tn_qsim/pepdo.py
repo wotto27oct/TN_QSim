@@ -250,8 +250,41 @@ class PEPDO(TensorNetwork):
                     edge_list.append(node_edge_list)
                 else:
                     tn.connect(node[1], self.nodes[tidx[i]][0])
+
+                    # calc direction  up:1 right:2 down:3 left:4
                     dir = return_dir(tidx[i] - tidx[i-1])
+
+                    # split nodes of PEPS via QR
                     l_l_edges = [node_list[i-1][j] for j in range(0, 6) if j != dir]
+                    l_r_edges = [node_list[i-1][dir]] + [node_list[i-1][6]]
+                    lQ, lR = tn.split_node_qr(node_list[i-1], l_l_edges, l_r_edges, edge_name="qr_left")
+                    qr_left_edge = lQ.get_edge("qr_left")
+                    lQ = lQ.reorder_edges(l_l_edges + [qr_left_edge])
+                    lR = lR.reorder_edges(l_r_edges + [qr_left_edge])
+                    r_l_edges = [self.nodes[tidx[i]][0]] + [self.nodes[tidx[i]][(dir+1)%4+1]]
+                    r_r_edges = [self.nodes[tidx[i]][j] for j in range(1, 6) if j != (dir+1)%4+1]
+                    rR, rQ = tn.split_node_rq(self.nodes[tidx[i]], r_l_edges, r_r_edges, edge_name="qr_right")
+                    qr_right_edge = rR.get_edge("qr_right")
+                    rR = rR.reorder_edges(r_l_edges + [qr_right_edge])
+                    rQ = rQ.reorder_edges(r_r_edges + [qr_right_edge])
+
+                    # contract left_R, right_R, node
+                    svd_node_edge_list = None
+                    svd_node_list = [lR, rR, node]
+                    svd_node_edge_list = [qr_left_edge, node[0], node[3], qr_right_edge]
+                    svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
+
+                    # split via SVD for truncation
+                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 5)]
+                    node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
+                    r_edge_order = [Vh[1]] + [rQ.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rQ.edges[i] for i in range((dir+1)%4, 4)] + [Vh[2]]
+                    new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
+                    if i == mpo.n - 1:
+                        tn.flatten_edges([new_node[5], new_node[6]])
+                    node_list.append(new_node)
+
+                    """l_l_edges = [node_list[i-1][j] for j in range(0, 6) if j != dir]
                     l_r_edges = [node_list[i-1][dir]] + [node_list[i-1][6]]
                     lU, ls, lVh, _ = tn.split_node_full_svd(node_list[i-1], l_l_edges, l_r_edges)
                     r_l_edges = [self.nodes[tidx[i]][0]] + [self.nodes[tidx[i]][(dir+1)%4+1]]
@@ -268,7 +301,7 @@ class PEPDO(TensorNetwork):
                     new_node = tn.contractors.optimal([s, Vh, rVh], output_edge_order=r_edge_order)
                     if i == mpo.n - 1:
                         tn.flatten_edges([new_node[5], new_node[6]])
-                    node_list.append(new_node)
+                    node_list.append(new_node)"""
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
