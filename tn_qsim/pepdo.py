@@ -354,7 +354,7 @@ class PEPDO(TensorNetwork):
         return tn, tree
 
 
-    def find_optimal_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
+    def find_optimal_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
         """truncate the specified index using FET method
 
         Args:
@@ -386,14 +386,20 @@ class PEPDO(TensorNetwork):
         nU, nVh, nFid = None, None, 1.0
         if threthold is not None:
             for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
-                nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
+                if not gauge:
+                    nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
+                else:
+                    nU, nVh, nFid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, threthold=threthold, visualize=visualize)
                 if nFid < threthold:
                     truncate_dim = cur_truncate_dim + 1
                     break
                 U, Vh, Fid = nU, nVh, nFid
         else:
             # must be some truncate_dim
-            U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+            if not gauge:
+                U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+            else:
+                U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
 
         # if truncation is executed        
         if U is not None:
