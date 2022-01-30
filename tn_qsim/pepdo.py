@@ -387,7 +387,7 @@ class PEPDO(TensorNetwork):
         if threthold is not None:
             for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
                 if not gauge:
-                    nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
+                    nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 else:
                     nU, nVh, nFid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, threthold=threthold, visualize=visualize)
                 if nFid < threthold:
@@ -397,7 +397,7 @@ class PEPDO(TensorNetwork):
         else:
             # must be some truncate_dim
             if not gauge:
-                U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+                U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, gpu=gpu, visualize=visualize)
             else:
                 U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
 

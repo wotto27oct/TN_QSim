@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from jax.interpreters import xla
 import numba
 import functools
+import cupy as cp
 
 class TensorNetwork():
     """base class of Tensor Network
@@ -520,7 +521,7 @@ class TensorNetwork():
         return U, Vh, Fid
 
     
-    def find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, visualize=False):
+    def find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, gpu=False, visualize=False):
         """find optimal truncation U, Vh given Gamma and trun_dim
         Args:
             Gamma (np.array) : env-tensor Gamma_iIjJ
@@ -536,66 +537,131 @@ class TensorNetwork():
         if visualize:
             print(f"bond: {bond_dim}, trun: {trun_dim}")
 
-        I = np.eye(bond_dim)
-        U, s, Vh = np.linalg.svd(I)
-        U = U[:,:trun_dim]
-        S = np.diag(s[:trun_dim])
-        Vh = Vh[:trun_dim, :]
+        if not gpu and trun_dim < 8:
+            I = np.eye(bond_dim)
+            U, s, Vh = np.linalg.svd(I)
+            U = U[:,:trun_dim]
+            S = np.diag(s[:trun_dim])
+            Vh = Vh[:trun_dim, :]
 
-        Fid = oe.contract("iIiI", Gamma)
-        if visualize:
-            print(f"Fid before truncation: {Fid}")
+            Fid = oe.contract("iIiI", Gamma)
+            if visualize:
+                print(f"Fid before truncation: {Fid}")
 
-        R = oe.contract("pq,qj->pj",S,Vh).flatten()
-        P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
-        A = oe.contract("a,b->ab",P,P.conj())
-        B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-        Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-        if visualize:
-            print(f"Fid before optimization: {Fid}")
-        
-        Rmax = None
-
-        for i in range(trials):
-            ## step1
             R = oe.contract("pq,qj->pj",S,Vh).flatten()
             P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
             A = oe.contract("a,b->ab",P,P.conj())
             B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-
-            #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-
-            Rmax = np.dot(np.linalg.pinv(B), P)
-            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+            Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
             if visualize:
-                print(f"fid at trial {i} step1: {Fid}")
+                print(f"Fid before optimization: {Fid}")
+            
+            Rmax = None
 
-            Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
-            S = np.dot(Utmp, np.diag(stmp))
+            for i in range(trials):
+                ## step1
+                R = oe.contract("pq,qj->pj",S,Vh).flatten()
+                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+                A = oe.contract("a,b->ab",P,P.conj())
+                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
 
-            """Binv = np.linalg.inv(B)
-            Aprime = np.dot(Binv, A)
-            eig, w = np.linalg.eig(Aprime)
-            print(eig)"""
+                #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
 
-            ## step2
-            R = oe.contract("ip,pq->qi",U,S).flatten()
-            P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj()).flatten()
-            A = oe.contract("a,b->ab",P,P.conj())
-            B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+                Rmax = np.dot(np.linalg.pinv(B), P)
+                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+                if visualize:
+                    print(f"fid at trial {i} step1: {Fid}")
 
-            Rmax = np.dot(np.linalg.pinv(B), P)
-            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
-            if visualize:
-                print(f"fid at trial {i} step2: {Fid}")
+                Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
+                S = np.dot(Utmp, np.diag(stmp))
 
-            U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
-            S = np.dot(np.diag(stmp), Vhtmp)
+                """Binv = np.linalg.inv(B)
+                Aprime = np.dot(Binv, A)
+                eig, w = np.linalg.eig(Aprime)
+                print(eig)"""
+
+                ## step2
+                R = oe.contract("ip,pq->qi",U,S).flatten()
+                P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj()).flatten()
+                A = oe.contract("a,b->ab",P,P.conj())
+                B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+
+                Rmax = np.dot(np.linalg.pinv(B), P)
+                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+                if visualize:
+                    print(f"fid at trial {i} step2: {Fid}")
+
+                U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
+                S = np.dot(np.diag(stmp), Vhtmp)
+            
+            trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
+            U = np.dot(U, S) / np.sqrt(trace)
+
+            return U, Vh, Fid
         
-        trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
-        U = np.dot(U, S) / np.sqrt(trace)
+        else:
+            print("using cupy")
+            Gamma = cp.array(Gamma)
+            I = cp.eye(bond_dim)
+            U, s, Vh = cp.linalg.svd(I)
+            U = U[:,:trun_dim]
+            S = cp.diag(s[:trun_dim])
+            Vh = Vh[:trun_dim, :]
 
-        return U, Vh, Fid
+            Fid = oe.contract("iIiI", Gamma, backend="cupy")
+            if visualize:
+                print(f"Fid before truncation: {Fid}")
+
+            R = oe.contract("pq,qj->pj",S,Vh, backend="cupy").flatten()
+            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="cupy").flatten()
+            A = oe.contract("a,b->ab",P,P.conj(), backend="cupy")
+            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="cupy").reshape(trun_dim*bond_dim, -1)
+            Fid = cp.dot(R.conj(), cp.dot(A, R)) / cp.dot(R.conj(), cp.dot(B, R))
+            if visualize:
+                print(f"Fid before optimization: {Fid}")
+            
+            Rmax = None
+
+            for i in range(trials):
+                ## step1
+                R = oe.contract("pq,qj->pj",S,Vh, backend="cupy").flatten()
+                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="cupy").flatten()
+                A = oe.contract("a,b->ab",P,P.conj(), backend="cupy")
+                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="cupy").reshape(trun_dim*bond_dim, -1)
+
+                #Fid = cp.dot(R.conj(), cp.dot(A, R)) / cp.dot(R.conj(), cp.dot(B, R))
+
+                Rmax = cp.dot(cp.linalg.pinv(B), P)
+                Fid = cp.dot(Rmax.conj(), cp.dot(A, Rmax)) / cp.dot(Rmax.conj(), cp.dot(B, Rmax))
+                if visualize:
+                    print(f"fid at trial {i} step1: {Fid}")
+
+                Utmp, stmp, Vh = cp.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
+                S = cp.dot(Utmp, cp.diag(stmp))
+
+                """Binv = cp.linalg.inv(B)
+                Aprime = cp.dot(Binv, A)
+                eig, w = cp.linalg.eig(Aprime)
+                print(eig)"""
+
+                ## step2
+                R = oe.contract("ip,pq->qi",U,S, backend="cupy").flatten()
+                P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj(), backend="cupy").flatten()
+                A = oe.contract("a,b->ab",P,P.conj(), backend="cupy")
+                B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+
+                Rmax = cp.dot(cp.linalg.pinv(B), P)
+                Fid = cp.dot(Rmax.conj(), cp.dot(A, Rmax)) / cp.dot(Rmax.conj(), cp.dot(B, Rmax))
+                if visualize:
+                    print(f"fid at trial {i} step2: {Fid}")
+
+                U, stmp, Vhtmp = cp.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
+                S = cp.dot(cp.diag(stmp), Vhtmp)
+            
+            trace = cp.dot(Rmax.conj(), cp.dot(B, Rmax))
+            U = cp.dot(U, S) / cp.sqrt(trace)
+
+            return cp.asnumpy(U), cp.asnumpy(Vh), Fid
 
 
     def replace_tensors(self, tensor_indexes, r_tensors):
