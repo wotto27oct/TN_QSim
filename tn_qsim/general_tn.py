@@ -553,6 +553,8 @@ class TensorNetwork():
         Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
         if visualize:
             print(f"Fid before optimization: {Fid}")
+        
+        Rmax = None
 
         for i in range(trials):
             ## step1
@@ -590,7 +592,8 @@ class TensorNetwork():
             U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
             S = np.dot(np.diag(stmp), Vhtmp)
         
-        U = np.dot(U, S) / np.sqrt(Fid)
+        trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
+        U = np.dot(U, S) / np.sqrt(trace)
 
         return U, Vh, Fid
 
