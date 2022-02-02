@@ -117,7 +117,7 @@ class PEPO(TensorNetwork):
         return node_list, output_edge_order
 
     
-    def calc_trace(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+    def calc_trace(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
         """contract PEPO and generate trace of full density operator
 
         Args:
@@ -129,16 +129,16 @@ class PEPO(TensorNetwork):
         Returns:
             np.array: tensor after contraction
         """
-
-        node_list, output_edge_order = self.prepare_trace()
         
-        if tree == None and path == None and self.trace_tree is not None:
-            tree = self.trace_tree
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_trace()
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
-        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)    
 
-
-    def find_trace_tree(self, algorithm=None, memory_limit=None, visualize=False):
+    def find_trace_tree(self, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction tree of the trace of the PEPO
 
         Args:
@@ -150,11 +150,14 @@ class PEPO(TensorNetwork):
             total_cost (int) : total temporal cost
             max_sp_cost (int) : max spatial cost
         """
+
         node_list, output_edge_order = self.prepare_trace()
 
-        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        self.trace_tree = tree
-        return tree, total_cost, max_sp_cost
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
+
+        return tn, tree
 
     
     def prepare_pepo_trace(self, pepo):

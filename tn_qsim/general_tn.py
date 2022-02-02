@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from jax.interpreters import xla
 import numba
 import functools
-import cupy as cp
+#import cupy as cp
 
 class TensorNetwork():
     """base class of Tensor Network
@@ -601,6 +601,7 @@ class TensorNetwork():
         
         else:
             print("using cupy")
+            import cupy as cp
             Gamma = cp.array(Gamma)
             I = cp.eye(bond_dim)
             U, s, Vh = cp.linalg.svd(I)
