@@ -237,7 +237,14 @@ class MPS(TensorNetwork):
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    
+                    # calc fidelity for normalization
+                    s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+                    trun_s_sq = np.dot(trun_s, trun_s)
+                    fidelity = s_sq / (s_sq + trun_s_sq)
+                    total_fidelity *= fidelity
+
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     r_edge_order = None
@@ -253,7 +260,6 @@ class MPS(TensorNetwork):
                             r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]] + [Vh[2]]
                     node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
                     
-
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
 

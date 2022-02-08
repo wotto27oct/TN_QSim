@@ -126,6 +126,7 @@ class PEPS(TensorNetwork):
     
     def amplitude_BMPS(self, tensors):
         """calculate amplitude with given product states (typically computational basis) using BMPS
+        !!warning!! open qubits must be at the top row.
 
         Args:
             tensor (list of np.array) : the amplitude index represented by the list of tensor
@@ -139,10 +140,11 @@ class PEPS(TensorNetwork):
 
         # contract product state first
         for i in range(self.n):
-            state = tn.Node(tensors[i].conj())
-            tn.connect(cp_nodes[i][0], state[0])
-            edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
-            cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
+            if tensors[i] is not None:
+                state = tn.Node(tensors[i].conj())
+                tn.connect(cp_nodes[i][0], state[0])
+                edge_order = [cp_nodes[i].edges[j] for j in range(1, len(cp_nodes[i].edges))]
+                cp_nodes[i] = tn.contractors.auto([cp_nodes[i], state], edge_order)
 
         # suppose the dimension of down below is 1
         mps_node = []
@@ -174,19 +176,31 @@ class PEPS(TensorNetwork):
                     elif w == self.width - 1:
                         tensor = tensor.reshape(shape[0], 1, shape[1], shape[2])
                 elif h == 0:
-                    if w == 0:
-                        tensor = tensor.reshape(1, shape[0], shape[1], 1)
-                    elif w == self.width - 1:
-                        tensor = tensor.reshape(1, 1, shape[0], shape[1])
+                    # if tensor is open or not
+                    if tensors[w] is not None:
+                        if w == 0:
+                            tensor = tensor.reshape(1, shape[0], shape[1], 1)
+                        elif w == self.width - 1:
+                            tensor = tensor.reshape(1, 1, shape[0], shape[1])
+                        else:
+                            tensor = tensor.reshape(1, shape[0], shape[1], shape[2])
                     else:
-                        tensor = tensor.reshape(1, shape[0], shape[1], shape[2])
+                        # if tensor is open
+                        if w == 0:
+                            tensor = tensor.reshape(shape[0], shape[1], shape[2], 1)
+                        elif w == self.width - 1:
+                            tensor = tensor.reshape(shape[0], 1, shape[1], shape[2])
+                        else:
+                            tensor = tensor.reshape(shape[0], shape[1], shape[2], shape[3])
+
                 mpo_node.append(tensor.transpose(0,2,3,1))
             mpo = MPO(mpo_node)
-            fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=True)
             #print("bmps mps-dim", mps.virtual_dims)
             total_fid = total_fid * fid
-            
-        return mps.contract().flatten()[0]
+
+        return mps.contract().flatten()   
+        #return mps.contract().flatten()[0]
 
     
     def prepare_inner(self):
@@ -369,7 +383,7 @@ class PEPS(TensorNetwork):
 
     
     def apply_MPO_with_truncation(self, tidx, mpo):
-        """ apply MPO
+        """ apply MPO with simple update
         
         Args:
             tidx (list of int) : list of qubit index we apply to.
