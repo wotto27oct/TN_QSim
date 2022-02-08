@@ -600,24 +600,23 @@ class TensorNetwork():
             return U, Vh, Fid
         
         else:
-            print("using cupy")
-            import cupy as cp
-            Gamma = cp.array(Gamma)
-            I = cp.eye(bond_dim)
-            U, s, Vh = cp.linalg.svd(I)
+            print("using jax")
+            Gamma = jax.numpy.array(Gamma)
+            I = jax.numpy.eye(bond_dim)
+            U, s, Vh = jax.numpy.linalg.svd(I)
             U = U[:,:trun_dim]
-            S = cp.diag(s[:trun_dim])
+            S = jax.numpy.diag(s[:trun_dim])
             Vh = Vh[:trun_dim, :]
 
-            Fid = oe.contract("iIiI", Gamma, backend="cupy")
+            Fid = oe.contract("iIiI", Gamma, backend="jax")
             if visualize:
                 print(f"Fid before truncation: {Fid}")
 
-            R = oe.contract("pq,qj->pj",S,Vh, backend="cupy").flatten()
-            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="cupy").flatten()
-            A = oe.contract("a,b->ab",P,P.conj(), backend="cupy")
-            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="cupy").reshape(trun_dim*bond_dim, -1)
-            Fid = cp.dot(R.conj(), cp.dot(A, R)) / cp.dot(R.conj(), cp.dot(B, R))
+            R = oe.contract("pq,qj->pj",S,Vh, backend="jax").flatten()
+            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="jax").flatten()
+            A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
+            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="jax").reshape(trun_dim*bond_dim, -1)
+            Fid = jax.numpy.dot(R.conj(), jax.numpy.dot(A, R)) / jax.numpy.dot(R.conj(), jax.numpy.dot(B, R))
             if visualize:
                 print(f"Fid before optimization: {Fid}")
             
@@ -625,44 +624,44 @@ class TensorNetwork():
 
             for i in range(trials):
                 ## step1
-                R = oe.contract("pq,qj->pj",S,Vh, backend="cupy").flatten()
-                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="cupy").flatten()
-                A = oe.contract("a,b->ab",P,P.conj(), backend="cupy")
-                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="cupy").reshape(trun_dim*bond_dim, -1)
+                R = oe.contract("pq,qj->pj",S,Vh, backend="jax").flatten()
+                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="jax").flatten()
+                A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
+                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="jax").reshape(trun_dim*bond_dim, -1)
 
-                #Fid = cp.dot(R.conj(), cp.dot(A, R)) / cp.dot(R.conj(), cp.dot(B, R))
+                #Fid = jax.numpy.dot(R.conj(), jax.numpy.dot(A, R)) / jax.numpy.dot(R.conj(), jax.numpy.dot(B, R))
 
-                Rmax = cp.dot(cp.linalg.pinv(B), P)
-                Fid = cp.dot(Rmax.conj(), cp.dot(A, Rmax)) / cp.dot(Rmax.conj(), cp.dot(B, Rmax))
+                Rmax = jax.numpy.dot(jax.numpy.linalg.pinv(B), P)
+                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
                 if visualize:
                     print(f"fid at trial {i} step1: {Fid}")
 
-                Utmp, stmp, Vh = cp.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
-                S = cp.dot(Utmp, cp.diag(stmp))
+                Utmp, stmp, Vh = jax.numpy.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
+                S = jax.numpy.dot(Utmp, jax.numpy.diag(stmp))
 
-                """Binv = cp.linalg.inv(B)
-                Aprime = cp.dot(Binv, A)
-                eig, w = cp.linalg.eig(Aprime)
+                """Binv = jax.numpy.linalg.inv(B)
+                Aprime = jax.numpy.dot(Binv, A)
+                eig, w = jax.numpy.linalg.eig(Aprime)
                 print(eig)"""
 
                 ## step2
-                R = oe.contract("ip,pq->qi",U,S, backend="cupy").flatten()
-                P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj(), backend="cupy").flatten()
-                A = oe.contract("a,b->ab",P,P.conj(), backend="cupy")
+                R = oe.contract("ip,pq->qi",U,S, backend="jax").flatten()
+                P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj(), backend="jax").flatten()
+                A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
                 B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
 
-                Rmax = cp.dot(cp.linalg.pinv(B), P)
-                Fid = cp.dot(Rmax.conj(), cp.dot(A, Rmax)) / cp.dot(Rmax.conj(), cp.dot(B, Rmax))
+                Rmax = jax.numpy.dot(jax.numpy.linalg.pinv(B), P)
+                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
                 if visualize:
                     print(f"fid at trial {i} step2: {Fid}")
 
-                U, stmp, Vhtmp = cp.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
-                S = cp.dot(cp.diag(stmp), Vhtmp)
+                U, stmp, Vhtmp = jax.numpy.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
+                S = jax.numpy.dot(jax.numpy.diag(stmp), Vhtmp)
             
-            trace = cp.dot(Rmax.conj(), cp.dot(B, Rmax))
-            U = cp.dot(U, S) / cp.sqrt(trace)
+            trace = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
+            U = jax.numpy.dot(U, S) / jax.numpy.sqrt(trace)
 
-            return cp.asnumpy(U), cp.asnumpy(Vh), Fid
+            return np.array(U), np.array(Vh), Fid
 
 
     def replace_tensors(self, tensor_indexes, r_tensors):
