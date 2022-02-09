@@ -58,7 +58,7 @@ class MERA(TensorNetwork):
 
         return node_list, output_edge_order
 
-    def find_contract(self,algorithm=None, seq="ADCRS", visualize=False):
+    def find_contract(self, algorithm=None, seq="ADCRS", visualize=False):
         """contract contraction path by using quimb
 
         Args:
@@ -79,6 +79,7 @@ class MERA(TensorNetwork):
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
 
+
     def contract(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """contract MERA and generate full state
 
@@ -95,3 +96,51 @@ class MERA(TensorNetwork):
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    
+    def prepare_second_renyi(self, Arange):
+        node_list1, output_edge_order1 = self.prepare_contract()
+        node_list2, output_edge_order2 = self.prepare_contract()
+        node_list3, output_edge_order3 = self.prepare_contract()
+        node_list4, output_edge_order4 = self.prepare_contract()
+
+        for node in node_list1:
+            node.tensor = node.tensor.conj()
+        for node in node_list3:
+            node.tensor = node.tensor.conj()
+
+        # connect open indices
+        for a in range(Arange):
+            tn.connect(output_edge_order1[a], output_edge_order2[a])
+            tn.connect(output_edge_order3[a], output_edge_order4[a])
+        for b in range(Arange, 2**self.depth):
+            tn.connect(output_edge_order2[b], output_edge_order3[b])
+            tn.connect(output_edge_order4[b], output_edge_order1[b])
+
+        output_edge_order = []
+
+        node_list = node_list1 + node_list2 + node_list3 + node_list4
+
+        return node_list, output_edge_order
+
+    def find_calc_second_renyi(self, Arange, algorithm=None, seq="ADCRS", visualize=False):
+        """contract contraction path by using quimb
+
+        Args:
+            Arange (int) : the range of A, [0, Arange-1]
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+        
+        node_list, output_edge_order = self.prepare_second_renyi(Arange)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
