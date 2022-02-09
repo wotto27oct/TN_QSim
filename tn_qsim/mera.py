@@ -161,12 +161,13 @@ class MERA(TensorNetwork):
             node.tensor = node.tensor.conj()
 
         # connect open indices
-        for a in range(Arange):
+        for a in Arange:
             tn.connect(output_edge_order2[a], output_edge_order3[a])
             tn.connect(output_edge_order4[a], output_edge_order1[a])
-        for b in range(Arange, 2**self.depth):
-            tn.connect(output_edge_order1[b], output_edge_order2[b])
-            tn.connect(output_edge_order3[b], output_edge_order4[b])
+        for b in range(2**self.depth):
+            if b not in Arange:
+                tn.connect(output_edge_order1[b], output_edge_order2[b])
+                tn.connect(output_edge_order3[b], output_edge_order4[b])
 
         output_edge_order = []
 
@@ -178,7 +179,7 @@ class MERA(TensorNetwork):
         """contract contraction path by using quimb
 
         Args:
-            Arange (int) : the range of A, [0, Arange-1]
+            Arange (list of int) : the range of A
             tensors (list of np.array) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
