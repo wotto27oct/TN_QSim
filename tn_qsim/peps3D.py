@@ -166,9 +166,9 @@ class PEPS3D(TensorNetwork):
         
         if tn is None:
             node_list, output_edge_order = self.prepare_amplitude(tensors)
-            tn = from_tn_to_quimb(node_list, output_edge_order)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
-        return self.contract_tree_by_quimb(tn, algorithm, tree, target_size, gpu, thread, seq)
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
     
     def apply_MPO(self, tidx, mpo):
