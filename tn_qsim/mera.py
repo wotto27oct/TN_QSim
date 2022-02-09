@@ -195,3 +195,23 @@ class MERA(TensorNetwork):
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+
+    def calc_second_renyi(self, Arange=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """contract contraction path by using quimb
+
+        Args:
+            Arange (int) : the range of A, [0, Arange-1]
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+        output_inds = None
+        if tn is None or tree is None:
+            node_list, output_edge_order = self.prepare_second_renyi(Arange)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, output_inds, target_size, gpu, thread, seq)
