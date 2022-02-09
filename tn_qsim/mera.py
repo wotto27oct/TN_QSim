@@ -162,11 +162,11 @@ class MERA(TensorNetwork):
 
         # connect open indices
         for a in range(Arange):
-            tn.connect(output_edge_order1[a], output_edge_order2[a])
-            tn.connect(output_edge_order3[a], output_edge_order4[a])
+            tn.connect(output_edge_order2[a], output_edge_order3[a])
+            tn.connect(output_edge_order4[a], output_edge_order1[a])
         for b in range(Arange, 2**self.depth):
-            tn.connect(output_edge_order2[b], output_edge_order3[b])
-            tn.connect(output_edge_order4[b], output_edge_order1[b])
+            tn.connect(output_edge_order1[b], output_edge_order2[b])
+            tn.connect(output_edge_order3[b], output_edge_order4[b])
 
         output_edge_order = []
 
