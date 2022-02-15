@@ -31,3 +31,4 @@ libcu*
 cutensor*.py
 cuquantum*
 cuQuantum*
+*.yml

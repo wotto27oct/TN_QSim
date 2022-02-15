@@ -1,9 +1,9 @@
 import numpy as np
-from scipy.sparse.linalg.eigen.arpack.arpack import CNEUPD_ERRORS
 import tensornetwork as tn
 from tn_qsim.mpo import MPO
 from tn_qsim.mps import MPS
 from tn_qsim.general_tn import TensorNetwork
+from tn_qsim.utils import from_tn_to_quimb
 
 class PEPS(TensorNetwork):
     """class of PEPS
@@ -122,6 +122,68 @@ class PEPS(TensorNetwork):
 
         result = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
         return result
+
+    def prepare_amplitude(self, tensors):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+
+        # if there are dangling edges which dimension is 1, contract first
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+
+        node_list = []
+
+        # contract product state first
+        for i in range(self.n):
+            # if tensors[i] is None, leave it open
+            if tensors[i] is None:
+                output_edge_order.append(cp_nodes[-(self.n-i)][0])
+                node_list.append(cp_nodes[-(self.n-i)])
+            else:
+                state = tn.Node(tensors[i].conj())
+                tn.connect(cp_nodes[-(self.n-i)][0], state[0])
+                edge_order = [cp_nodes[-(self.n-i)].edges[j] for j in range(1, len(cp_nodes[-(self.n-i)].edges))]
+                node_list.append(tn.contractors.auto([cp_nodes[-(self.n-i)], state], edge_order))
+                cp_nodes[-(self.n-i)].tensor = None
+                state.tensor = None
+
+        return node_list, output_edge_order
+
+    def find_amplitude_tree_by_quimb(self, tensors, algorithm=None, seq="ADCRS", visualize=False):
+        """contract amplitude with given product states by using quimb (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        node_list, output_edge_order = self.prepare_amplitude(tensors)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+    
+    def amplitude_by_quimb(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """contract amplitude with given product states by using quimb (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        if tn is None:
+            node_list, output_edge_order = self.prepare_amplitude(tensors)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
     
     def amplitude_BMPS(self, tensors):
@@ -382,13 +444,16 @@ class PEPS(TensorNetwork):
             self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])
 
     
-    def apply_MPO_with_truncation(self, tidx, mpo):
+    def apply_MPO_with_truncation(self, tidx, mpo, truncate_dim=None):
         """ apply MPO with simple update
         
         Args:
             tidx (list of int) : list of qubit index we apply to.
             mpo (MPO) : MPO tensornetwork.
+            truncate_dim (int) : truncation dim
         """
+        if truncate_dim is None:
+            truncate_dim = self.truncate_dim
 
         def return_dir(diff):
             if diff == -self.width:
@@ -461,7 +526,7 @@ class PEPS(TensorNetwork):
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], truncate_dim)
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 4)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     if i == mpo.n - 1:
