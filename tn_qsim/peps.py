@@ -428,7 +428,6 @@ class PEPS(TensorNetwork):
         
         for i in range(len(tidx)):
             edge_list.append(node_list[i].edges)
-            
 
         for i in range(len(tidx)-1):
             dir = return_dir(tidx[i+1] - tidx[i])
