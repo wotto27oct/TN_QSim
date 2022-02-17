@@ -70,16 +70,36 @@ class PEPS3D(TensorNetwork):
         node_list = [node for node in cp_nodes]
 
         output_edge_order = []
-        print(self.top_edges)
+        #print(self.top_edges)
         for i in range(self.n):
             #output_edge_order.append(cp_nodes[-(self.n-i)][0])
-            print(self.top_edges[i][0], self.top_edges[i][1])
+            #print(self.top_edges[i][0], self.top_edges[i][1])
             output_edge_order.append(node_list[self.top_edges[i][0]][self.top_edges[i][1]])
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
 
     def prepare_amplitude(self, tensors):
+        #cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+        cp_nodes = tn.replicate_nodes(self.past_nodes)
+
+        node_list = [node for node in cp_nodes]
+        output_edge_order = []
+
+        # contract product state first
+        for i in range(self.n):
+            # if tensors[i] is None, leave it open
+            if tensors[i] is None:
+                output_edge_order.append(node_list[self.top_edges[i][0]][self.top_edges[i][1]])
+            else:
+                state = tn.Node(tensors[i].conj())
+                tn.connect(node_list[self.top_edges[i][0]][self.top_edges[i][1]], state[0])
+                node_list.append(state)
+
+        return node_list, output_edge_order
+
+
+    """def prepare_amplitude(self, tensors):
         #cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
         print(self.past_nodes)
         cp_nodes = tn.replicate_nodes(self.past_nodes)
@@ -101,7 +121,7 @@ class PEPS3D(TensorNetwork):
                 cp_nodes[-(self.n-i)].tensor = None
                 state.tensor = None
 
-        return node_list, output_edge_order
+        return node_list, output_edge_order"""
 
 
     def find_amplitude_tree(self, tensors, algorithm=None, memory_limit=None, path=None, visualize=False):
@@ -203,9 +223,9 @@ class PEPS3D(TensorNetwork):
             one2 = tn.Node(np.array([1]))
             tn.connect(node[3], one2[0])
             node_contract_list.append(one2)
-            tn.connect(node[1], self.top_edges[tidx[0]])
-            self.top_edges[tidx[0]] = node[0]
             self.past_nodes.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+            tn.connect(self.past_nodes[-1][1], self.past_nodes[self.top_edges[tidx[0]][0]][self.top_edges[tidx[0]][1]])
+            self.top_edges[tidx[0]] = [len(self.past_nodes)-1, 0]
         else:
             # multi qubit gate - leave it
             for i, node in enumerate(mpo.nodes):
@@ -219,8 +239,9 @@ class PEPS3D(TensorNetwork):
                     tn.connect(node[3], one[0])
                     node_edge_list = [node[e] for e in range(len(node.edges)) if e != 3]
                     node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
-                tn.connect(node[1], self.top_edges[tidx[i]])
+                tn.connect(node[1], self.past_nodes[self.top_edges[tidx[i]][0]][self.top_edges[tidx[i]][1]])
                 self.past_nodes.append(node)
+                self.top_edges[tidx[i]] = [len(self.past_nodes)-1, 0]
 
         # single qubit gate - contract
         """if len(tidx) == 1:
