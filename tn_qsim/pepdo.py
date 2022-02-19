@@ -203,7 +203,7 @@ class PEPDO(TensorNetwork):
         return cp_nodes, output_edge_order
 
     
-    def apply_MPO(self, tidx, mpo):
+    def apply_MPO(self, tidx, mpo, last_dir=None):
         """ apply MPO
         
         Args:
@@ -281,7 +281,14 @@ class PEPDO(TensorNetwork):
                     r_edge_order = [Vh[1]] + [rQ.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rQ.edges[i] for i in range((dir+1)%4, 4)] + [Vh[2]]
                     new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
                     if i == mpo.n - 1:
-                        tn.flatten_edges([new_node[5], new_node[6]])
+                        # decide where to absorb the rightmost edge of mpo
+                        if last_dir is None:
+                            tn.flatten_edges([new_node[5], new_node[6]])
+                        else:
+                            tn.flatten_edges([new_node[last_dir], new_node[6]])
+                            reorder_list = [new_node[i] for i in range(last_dir)] + [new_node[5]] + [new_node[i] for i in range(last_dir, 5)]
+                            new_node.reorder_edges(reorder_list)
+
                     node_list.append(new_node)
 
         for i in range(len(tidx)):
