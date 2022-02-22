@@ -251,13 +251,15 @@ class TensorNetwork():
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
             #tn.draw()
         tn = tn.full_simplify(seq, output_inds=output_inds)
-        #print(tn.get_equation())
+        #print(tn.get_equation(output_inds))
         #print(tn.inner_inds())
         #print(tn.outer_inds())
         if len(tn.tensors) == 1:
             if visualize:
-                print("tensor network becomes scalar after simplification")
-            tree = ctg.core.ContractionTree([],"",dict(),track_flops=True)
+                print("tensor network becomes one tensor after simplification")
+            inputs, output, size_dict = tn.get_inputs_output_size_dict(output_inds=output_inds)
+            #print(inputs, output)
+            tree = ctg.core.ContractionTree(inputs, output, size_dict, track_flops=True)
             tree.multiplicity = 1
             tree._flops = 1.0
             tree.sliced_inds = ""
@@ -286,7 +288,16 @@ class TensorNetwork():
         if tree is None:
             tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq)
         if len(tn.tensors) == 1:
-            return tn.tensors[0].data
+            if tn.tensors[0].ndim == 0:
+                return tn.tensors[0].data
+            else:
+                #print("contract or reshape")
+                #print(output_inds)
+                inputs, output, _ = tn.get_inputs_output_size_dict(output_inds=output_inds)
+                #print(inputs, output)
+                #print(inputs[0] + "->" + output)
+                #print(tn.tensors[0].shape)
+                return np.einsum(inputs[0] + "->" + output, tn.tensors[0].data)
         tree_s = tree
         if target_size is not None:
             tree_s = tree.slice(target_size=target_size)
@@ -555,10 +566,17 @@ class TensorNetwork():
             Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
             if visualize:
                 print(f"Fid before optimization: {Fid}")
+
+            past_fid = Fid
             
             Rmax = None
 
-            for i in range(trials):
+            try_idx = 0
+
+            if trials == None:
+                trials = 1000
+
+            while (try_idx < trials):
                 ## step1
                 R = oe.contract("pq,qj->pj",S,Vh).flatten()
                 P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
@@ -570,7 +588,14 @@ class TensorNetwork():
                 Rmax = np.dot(np.linalg.pinv(B), P)
                 Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
                 if visualize:
-                    print(f"fid at trial {i} step1: {Fid}")
+                    print(f"fid at trial {try_idx} step1: {Fid}")
+                if past_fid > Fid:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
 
                 Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
                 S = np.dot(Utmp, np.diag(stmp))
@@ -589,10 +614,19 @@ class TensorNetwork():
                 Rmax = np.dot(np.linalg.pinv(B), P)
                 Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
                 if visualize:
-                    print(f"fid at trial {i} step2: {Fid}")
+                    print(f"fid at trial {try_idx} step2: {Fid}")
+                if past_fid > Fid:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
 
                 U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
                 S = np.dot(np.diag(stmp), Vhtmp)
+
+                try_idx += 1
             
             trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
             U = np.dot(U, S) / np.sqrt(trace)
@@ -616,25 +650,43 @@ class TensorNetwork():
             P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="jax").flatten()
             A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
             B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="jax").reshape(trun_dim*bond_dim, -1)
-            Fid = jax.numpy.dot(R.conj(), jax.numpy.dot(A, R)) / jax.numpy.dot(R.conj(), jax.numpy.dot(B, R))
+            trace = jax.numpy.dot(R.conj(), jax.numpy.dot(B, R))
+            Fid = jax.numpy.dot(R.conj(), jax.numpy.dot(A, R)) / trace
             if visualize:
                 print(f"Fid before optimization: {Fid}")
             
             Rmax = None
 
-            for i in range(trials):
+            past_fid = 0.0
+            past_trace = trace
+            first_fid = Fid
+            firstU = jax.numpy.dot(U, S) / np.sqrt(trace)
+            firstVh = Vh
+            try_idx = 0
+
+            if trials == None:
+                trials = 1000
+
+            while (try_idx < trials):
                 ## step1
                 R = oe.contract("pq,qj->pj",S,Vh, backend="jax").flatten()
                 P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj(), backend="jax").flatten()
                 A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
                 B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="jax").reshape(trun_dim*bond_dim, -1)
 
-                #Fid = jax.numpy.dot(R.conj(), jax.numpy.dot(A, R)) / jax.numpy.dot(R.conj(), jax.numpy.dot(B, R))
-
                 Rmax = jax.numpy.dot(jax.numpy.linalg.pinv(B), P)
-                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
+                trace = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
+                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / trace
                 if visualize:
-                    print(f"fid at trial {i} step1: {Fid}")
+                    print(f"fid at trial {try_idx} step1: {Fid}")
+                if past_fid > Fid:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
+                past_trace = trace
 
                 Utmp, stmp, Vh = jax.numpy.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
                 S = jax.numpy.dot(Utmp, jax.numpy.diag(stmp))
@@ -651,17 +703,33 @@ class TensorNetwork():
                 B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
 
                 Rmax = jax.numpy.dot(jax.numpy.linalg.pinv(B), P)
-                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
+                trace = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
+                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / trace
                 if visualize:
-                    print(f"fid at trial {i} step2: {Fid}")
+                    print(f"fid at trial {try_idx} step2: {Fid}")
+                if past_fid > Fid:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
+                past_trace = trace
 
                 U, stmp, Vhtmp = jax.numpy.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
                 S = jax.numpy.dot(jax.numpy.diag(stmp), Vhtmp)
-            
-            trace = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
-            U = jax.numpy.dot(U, S) / jax.numpy.sqrt(trace)
 
-            return np.array(U), np.array(Vh), Fid
+                try_idx += 1
+            
+            if first_fid < past_fid:
+                #print(past_fid, first_fid)
+                #print(past_trace)
+                #print(np.sqrt(past_trace))
+                U = jax.numpy.dot(U, S) / jax.numpy.sqrt(past_trace)
+
+                return np.array(U), np.array(Vh), past_fid
+            else:
+                return np.array(firstU), np.array(firstVh), first_fid
 
 
     def replace_tensors(self, tensor_indexes, r_tensors):
