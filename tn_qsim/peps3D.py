@@ -86,6 +86,7 @@ class PEPS3D(TensorNetwork):
         node_list = [node for node in cp_nodes]
         output_edge_order = []
 
+
         # contract product state first
         for i in range(self.n):
             # if tensors[i] is None, leave it open

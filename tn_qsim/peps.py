@@ -597,7 +597,7 @@ class PEPS(TensorNetwork):
         return tree, cost, sp_cost
 
 
-    def find_optimal_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, memory_limit=None, visualize=False):
+    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
         """truncate the specified index using FET method
 
         Args:
@@ -611,12 +611,40 @@ class PEPS(TensorNetwork):
 
         trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
 
-        if truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
+        if min_truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= min_truncate_dim:
             print("trun_dim already satisfied")
-            return
+            return 1.0
 
-        Gamma = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit)
-        # truncate while Fid < threthold
+        max_truncate_dim = min(max_truncate_dim, self.nodes[trun_node_idx][trun_edge_idx].dimension)
+
+        # includes tree == None case
+        output_inds = None
+        if tnq is None:
+            tnq, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+            tnq, tree = self.find_contract_tree_by_quimb(tnq, output_inds, algorithm, seq, visualize)
+            #tnq, tree = self.find_Gamma_tree([trun_node_idx, op_node_idx], algorithm=algorithm, seq=seq, visualize=visualize)
+
+        #print("calc Gamma...")
+        Gamma = self.contract_tree_by_quimb(tn=tnq, tree=tree, output_inds=output_inds) #iIjJ
+
+        U, Vh, Fid = None, None, 1.0
+        truncate_dim = None
+        if threthold is not None:
+            for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+                if cur_truncate_dim == Gamma.shape[0]:
+                    print("no truncation done")
+                    return 1.0
+                if not gauge:
+                    U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
+                else:
+                    U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, threthold=threthold, visualize=visualize)
+                
+                truncate_dim = cur_truncate_dim
+                if Fid > threthold:
+                    break
+        print(f"truncate dim: {truncate_dim}")
+
+        """# truncate while Fid < threthold
         if truncate_dim is None:
             truncate_dim = 1
         U, Vh, Fid = None, None, 1.0
@@ -630,7 +658,7 @@ class PEPS(TensorNetwork):
                 U, Vh, Fid = nU, nVh, nFid
         else:
             # must be some truncate_dim
-            U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+            U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)"""
 
         # if truncation is executed        
         if U is not None:
