@@ -172,6 +172,13 @@ class PEPDO(TensorNetwork):
                     edge_order.append(cp_nodes[node_idx][i])
             cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
 
+        # 7個以上edgeが付いていたらoutput_edge_orderに追加する
+        for i in range(self.n):
+            if len(cp_nodes[i].edges) >= 7:
+                for j in range(len(cp_nodes[i].edges)-1, 5, -1):
+                    output_edge_order.append(cp_nodes[i][j])
+                    output_edge_order.append(cp_nodes[i+self.n][j])
+
         # 5,4,3,2,1の順に消す
         for i in range(self.n):
             if cp_nodes[i].get_dimension(5) == 1:
@@ -203,13 +210,15 @@ class PEPDO(TensorNetwork):
         return cp_nodes, output_edge_order
 
     
-    def apply_MPO(self, tidx, mpo):
+    def apply_MPO(self, tidx, mpo, truncate_dim=None, last_dir=None):
         """ apply MPO
         
         Args:
             tidx (list of int) : list of qubit index we apply to.
             mpo (MPO) : MPO tensornetwork.
         """
+        if truncate_dim is None:
+            truncate_dim = self.truncate_dim
 
         def return_dir(diff):
             if diff == -self.width:
@@ -225,6 +234,9 @@ class PEPDO(TensorNetwork):
 
         edge_list = []
         node_list = []
+
+        # not accurate
+        total_fidelity = 1.0
 
         if len(tidx) == 1:
             node = mpo.nodes[0]
@@ -275,17 +287,33 @@ class PEPDO(TensorNetwork):
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], truncate_dim)
+
+                    # calc fidelity for normalization
+                    s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+                    trun_s_sq = np.dot(trun_s, trun_s)
+                    fidelity = s_sq / (s_sq + trun_s_sq)
+                    total_fidelity *= fidelity
+
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 5)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     r_edge_order = [Vh[1]] + [rQ.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rQ.edges[i] for i in range((dir+1)%4, 4)] + [Vh[2]]
                     new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
                     if i == mpo.n - 1:
-                        tn.flatten_edges([new_node[5], new_node[6]])
+                        # decide where to absorb the rightmost edge of mpo
+                        if last_dir is None:
+                            tn.flatten_edges([new_node[5], new_node[6]])
+                        elif last_dir != 6:
+                            tn.flatten_edges([new_node[last_dir], new_node[6]])
+                            reorder_list = [new_node[i] for i in range(last_dir)] + [new_node[5]] + [new_node[i] for i in range(last_dir, 5)]
+                            new_node.reorder_edges(reorder_list)
+
                     node_list.append(new_node)
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
+
+        return total_fidelity
 
     
     def prepare_Gamma(self, trun_node_idx):
@@ -354,7 +382,7 @@ class PEPDO(TensorNetwork):
         return tn, tree
 
 
-    def find_optimal_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
+    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
         """truncate the specified index using FET method
 
         Args:
@@ -369,37 +397,51 @@ class PEPDO(TensorNetwork):
 
         trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
         
-        if truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
+        if min_truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= min_truncate_dim:
             print("trun_dim already satisfied")
             return 1.0
+
+        max_truncate_dim = min(max_truncate_dim, self.nodes[trun_node_idx][trun_edge_idx].dimension)
 
         # includes tree == None case
         output_inds = None
         if tnq is None:
             tnq, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+            tnq, tree = self.find_contract_tree_by_quimb(tnq, output_inds, algorithm, seq, visualize)
+            #tnq, tree = self.find_Gamma_tree([trun_node_idx, op_node_idx], algorithm=algorithm, seq=seq, visualize=visualize)
 
-        Gamma = self.contract_tree_by_quimb(tnq, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
+        #print("calc Gamma...")
+        Gamma = self.contract_tree_by_quimb(tn=tnq, tree=tree, output_inds=output_inds) #iIjJ
 
-        if truncate_dim is None:
-            truncate_dim = 1
+        #print("Gamma calculated")
+        #print(oe.contract("iIiI",Gamma))
+
+        #if truncate_dim is None:
+        #    truncate_dim = 1
         U, Vh, Fid = None, None, 1.0
         nU, nVh, nFid = None, None, 1.0
+        truncate_dim = None
         if threthold is not None:
-            for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
+            for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+                if cur_truncate_dim == Gamma.shape[0]:
+                    print("no truncation done")
+                    return 1.0
                 if not gauge:
                     nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 else:
                     nU, nVh, nFid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, threthold=threthold, visualize=visualize)
-                if nFid < threthold:
-                    truncate_dim = cur_truncate_dim + 1
-                    break
+                
                 U, Vh, Fid = nU, nVh, nFid
-        else:
+                truncate_dim = cur_truncate_dim
+                if nFid > threthold:
+                    break
+        print(f"truncate dim: {truncate_dim}")
+        """else:
             # must be some truncate_dim
             if not gauge:
                 U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, gpu=gpu, visualize=visualize)
             else:
-                U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+                U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)"""
 
         # if truncation is executed        
         if U is not None:
@@ -486,7 +528,7 @@ class PEPDO(TensorNetwork):
         return tn, tree
 
 
-    def find_optimal_inner_truncation(self, trun_node_idx, truncate_dim=None, threthold=None, trials=10, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
+    def find_optimal_inner_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
         """truncate the specified index using FET method
 
         Args:
@@ -501,7 +543,7 @@ class PEPDO(TensorNetwork):
 
         trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_inner_Gamma(trun_node_idx)
         
-        if truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= truncate_dim:
+        if min_truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= min_truncate_dim:
             print("trun_dim already satisfied")
             return 1.0
 
@@ -509,17 +551,29 @@ class PEPDO(TensorNetwork):
         output_inds = None
         if tnq is None:
             tnq, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+            tnq, tree = self.find_contract_tree_by_quimb(tnq, output_inds, algorithm, seq, visualize)
 
-        Gamma = self.contract_tree_by_quimb(tnq, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
+        Gamma = self.contract_tree_by_quimb(tn=tnq, tree=tree, output_inds=output_inds)
 
         eye = np.eye(Gamma.shape[0])
         Gamma = oe.contract("iI,jJ->iIjJ",Gamma,eye)
 
-        if truncate_dim is None:
-            truncate_dim = 1
+        #if truncate_dim is None:
+        #    truncate_dim = 1
         U, Vh, Fid = None, None, 1.0
-        nU, nVh, nFid = None, None, 1.0
+        truncate_dim = None
         if threthold is not None:
+            for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+                if cur_truncate_dim == Gamma.shape[0]:
+                    print("no truncation done")
+                    return 1.0
+                U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
+                truncate_dim = cur_truncate_dim
+                if Fid > threthold:
+                    break
+        print(f"truncate dim: {truncate_dim}")
+
+        """if threthold is not None:
             for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
                 nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
                 if nFid < threthold:
@@ -528,7 +582,7 @@ class PEPDO(TensorNetwork):
                 U, Vh, Fid = nU, nVh, nFid
         else:
             # must be some truncate_dim
-            U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)
+            U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, truncate_dim, trials, visualize=visualize)"""
 
         # if truncation is executed        
         if U is not None:

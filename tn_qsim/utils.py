@@ -44,10 +44,13 @@ def from_nodes_to_str(node_list, output_edge_order):
 
 def from_tn_to_quimb(node_list, output_edge_order):
     input_alpha, output_alpha, edge_alpha_dims = from_nodes_to_str(node_list, output_edge_order)
+    #print(input_alpha)
+    #print(output_alpha)
     tensors = []
     for idx, node in enumerate(node_list):
         tensors.append(qtn.Tensor(data=node.tensor, inds=list(input_alpha[idx])))
         node.tensor = None
     tn = qtn.TensorNetwork(tensors)
     output_alpha = "".join(output_alpha)
+    #print(tn.get_equation(output_alpha))
     return tn, output_alpha

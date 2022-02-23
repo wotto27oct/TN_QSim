@@ -32,3 +32,4 @@ cutensor*.py
 cuquantum*
 cuQuantum*
 *.yml
+gkpsurface*

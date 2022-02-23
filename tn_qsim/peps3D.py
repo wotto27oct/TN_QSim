@@ -23,26 +23,33 @@ class PEPS3D(TensorNetwork):
         past_nodes (list of tn.Node) : the list of nodes that is not top
     """
 
-    def __init__(self, tensors, height, width):
-        self.n = len(tensors)
+    def __init__(self, tensors, height, width, base_nodes=None, top_edges=None):
+        self.n = height * width
         self.height = height
         self.width = width
         self.path = None
         edge_info = []
         buff =2*self.n + (self.height+1)*self.width
-        for h in range(self.height):
-            for w in range(self.width):
-                i = h*self.width + w
-                shape = tensors[i].shape
-                edge_info_original = [i, 2*self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, 2*self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w]
-                reshape_list = [s for s in shape if s != 1]
-                edge_info_list = [edge_info_original[sidx] for sidx in range(5) if shape[sidx] != 1]
-                tensors[i] = tensors[i].reshape(reshape_list)
-                edge_info.append(edge_info_list)
-        super().__init__(edge_info, tensors)
-        self.tree, self.trace_tree = None, None
-        self.top_nodes = [self.nodes[i] for i in range(self.height * self.width)]
+        self.top_nodes = []
         self.past_nodes = []
+        self.top_edges = []
+        if tensors is not None:
+            for h in range(self.height):
+                for w in range(self.width):
+                    i = h*self.width + w
+                    shape = tensors[i].shape
+                    edge_info_original = [i, 2*self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, 2*self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w]
+                    reshape_list = [s for s in shape if s != 1]
+                    edge_info_list = [edge_info_original[sidx] for sidx in range(5) if shape[sidx] != 1]
+                    tensors[i] = tensors[i].reshape(reshape_list)
+                    edge_info.append(edge_info_list)
+            super().__init__(edge_info, tensors)
+            self.past_nodes = [self.nodes[i] for i in range(self.height * self.width)]
+            self.top_edges = [[i, 0] for i in range(self.height * self.width)]
+        self.tree, self.trace_tree = None, None
+        if base_nodes is not None:
+            self.past_nodes = base_nodes
+            self.top_edges = top_edges
 
 
     def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
@@ -57,19 +64,45 @@ class PEPS3D(TensorNetwork):
         Returns:
             np.array: tensor after contraction
         """
-        cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+        #cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+        cp_nodes = tn.replicate_nodes(self.past_nodes)
 
         node_list = [node for node in cp_nodes]
 
         output_edge_order = []
+        #print(self.top_edges)
         for i in range(self.n):
-            output_edge_order.append(cp_nodes[-(self.n-i)][0])
+            #output_edge_order.append(cp_nodes[-(self.n-i)][0])
+            #print(self.top_edges[i][0], self.top_edges[i][1])
+            output_edge_order.append(node_list[self.top_edges[i][0]][self.top_edges[i][1]])
 
         return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
 
 
     def prepare_amplitude(self, tensors):
-        cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+        #cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+        cp_nodes = tn.replicate_nodes(self.past_nodes)
+
+        node_list = [node for node in cp_nodes]
+        output_edge_order = []
+
+        # contract product state first
+        for i in range(self.n):
+            # if tensors[i] is None, leave it open
+            if tensors[i] is None:
+                output_edge_order.append(node_list[self.top_edges[i][0]][self.top_edges[i][1]])
+            else:
+                state = tn.Node(tensors[i].conj())
+                tn.connect(node_list[self.top_edges[i][0]][self.top_edges[i][1]], state[0])
+                node_list.append(state)
+
+        return node_list, output_edge_order
+
+
+    """def prepare_amplitude(self, tensors):
+        #cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
+        print(self.past_nodes)
+        cp_nodes = tn.replicate_nodes(self.past_nodes)
 
         node_list = [cp_nodes[i] for i in range(len(cp_nodes) - self.n)]
         output_edge_order = []
@@ -88,7 +121,8 @@ class PEPS3D(TensorNetwork):
                 cp_nodes[-(self.n-i)].tensor = None
                 state.tensor = None
 
-        return node_list, output_edge_order
+        return node_list, output_edge_order"""
+
 
     def find_amplitude_tree(self, tensors, algorithm=None, memory_limit=None, path=None, visualize=False):
         """contract amplitude with given product states (typically computational basis)
@@ -142,7 +176,7 @@ class PEPS3D(TensorNetwork):
         Returns:
             np.array: tensor after contraction
         """
-        
+
         node_list, output_edge_order = self.prepare_amplitude(tensors)
 
         tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
@@ -163,14 +197,14 @@ class PEPS3D(TensorNetwork):
         Returns:
             np.array: tensor after contraction
         """
-        
+
         if tn is None:
             node_list, output_edge_order = self.prepare_amplitude(tensors)
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
-    
+
     def apply_MPO(self, tidx, mpo):
         """ apply MPO
         
@@ -178,8 +212,39 @@ class PEPS3D(TensorNetwork):
             tidx (list of int) : list of qubit index we apply to.
             mpo (MPO) : MPO tensornetwork.
         """
-        # single qubit gate - contract
+
         if len(tidx) == 1:
+            node = mpo.nodes[0]
+            node_contract_list = [node]
+            node_edge_list = [node[0], node[1]]
+            one = tn.Node(np.array([1]))
+            tn.connect(node[2], one[0])
+            node_contract_list.append(one)
+            one2 = tn.Node(np.array([1]))
+            tn.connect(node[3], one2[0])
+            node_contract_list.append(one2)
+            self.past_nodes.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+            tn.connect(self.past_nodes[-1][1], self.past_nodes[self.top_edges[tidx[0]][0]][self.top_edges[tidx[0]][1]])
+            self.top_edges[tidx[0]] = [len(self.past_nodes)-1, 0]
+        else:
+            # multi qubit gate - leave it
+            for i, node in enumerate(mpo.nodes):
+                if i == 0:
+                    one = tn.Node(np.array([1]))
+                    tn.connect(node[2], one[0])
+                    node_edge_list = [node[e] for e in range(len(node.edges)) if e != 2]
+                    node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
+                elif i == mpo.n - 1:
+                    one = tn.Node(np.array([1]))
+                    tn.connect(node[3], one[0])
+                    node_edge_list = [node[e] for e in range(len(node.edges)) if e != 3]
+                    node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
+                tn.connect(node[1], self.past_nodes[self.top_edges[tidx[i]][0]][self.top_edges[tidx[i]][1]])
+                self.past_nodes.append(node)
+                self.top_edges[tidx[i]] = [len(self.past_nodes)-1, 0]
+
+        # single qubit gate - contract
+        """if len(tidx) == 1:
             node = mpo.nodes[0]
             node_contract_list = [node, self.top_nodes[tidx[0]]]
             node_edge_list = [node[0]]
@@ -213,4 +278,4 @@ class PEPS3D(TensorNetwork):
                     self.top_nodes[tidx[i]] = tn.contractors.auto([node, self.top_nodes[tidx[i]]], output_edge_order=node_edge_list)
                 else:
                     self.past_nodes.append(self.top_nodes[tidx[i]])
-                    self.top_nodes[tidx[i]] = node
+                    self.top_nodes[tidx[i]] = node"""
