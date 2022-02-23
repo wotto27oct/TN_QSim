@@ -589,7 +589,7 @@ class TensorNetwork():
                 Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
                 if visualize:
                     print(f"fid at trial {try_idx} step1: {Fid}")
-                if past_fid > Fid:
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
                     print("numerically unstable")
                     break
                 elif np.abs(Fid - past_fid) < 1e-5:
@@ -615,7 +615,7 @@ class TensorNetwork():
                 Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
                 if visualize:
                     print(f"fid at trial {try_idx} step2: {Fid}")
-                if past_fid > Fid:
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
                     print("numerically unstable")
                     break
                 elif np.abs(Fid - past_fid) < 1e-5:
@@ -679,7 +679,7 @@ class TensorNetwork():
                 Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / trace
                 if visualize:
                     print(f"fid at trial {try_idx} step1: {Fid}")
-                if past_fid > Fid:
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
                     print("numerically unstable")
                     break
                 elif np.abs(Fid - past_fid) < 1e-5:
@@ -707,7 +707,7 @@ class TensorNetwork():
                 Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / trace
                 if visualize:
                     print(f"fid at trial {try_idx} step2: {Fid}")
-                if past_fid > Fid:
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
                     print("numerically unstable")
                     break
                 elif np.abs(Fid - past_fid) < 1e-5:
