@@ -590,14 +590,14 @@ class PEPS(TensorNetwork):
         """
         for i in range(self.n):
             self.nodes[i].name = f"node{i}"
-        
+
         trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
 
         tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
         return tree, cost, sp_cost
 
 
-    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
+    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False, calc_lim=None):
         """truncate the specified index using FET method
 
         Args:
@@ -622,6 +622,9 @@ class PEPS(TensorNetwork):
         if tnq is None:
             tnq, output_inds = from_tn_to_quimb(node_list, output_edge_order)
             tnq, tree = self.find_contract_tree_by_quimb(tnq, output_inds, algorithm, seq, visualize)
+            if calc_lim is not None and tree.total_flops() > calc_lim:
+                print("Gamma calc lim exceeded.")
+                return None
             #tnq, tree = self.find_Gamma_tree([trun_node_idx, op_node_idx], algorithm=algorithm, seq=seq, visualize=visualize)
 
         #print("calc Gamma...")
@@ -637,7 +640,7 @@ class PEPS(TensorNetwork):
                 if not gauge:
                     U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 else:
-                    U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, threthold=threthold, visualize=visualize)
+                    U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 
                 truncate_dim = cur_truncate_dim
                 if Fid > threthold:

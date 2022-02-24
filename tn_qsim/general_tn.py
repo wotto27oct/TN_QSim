@@ -407,8 +407,8 @@ class TensorNetwork():
             return result
 
     
-    def fix_gauge_and_find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, threthold=None, visualize=False):
-        """find optimal truncation U, Vh given Gamma and trun_dim
+    """def fix_gauge_and_find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, threthold=None, visualize=False):
+        find optimal truncation U, Vh given Gamma and trun_dim
         Args:
             Gamma (np.array) : env-tensor Gamma_iIjJ
             turncate_dim (int) : target bond dimension
@@ -417,7 +417,7 @@ class TensorNetwork():
         Returns:
             U (np.array) : left gauge tensor after optimization, shape (bond, trun)
             Vh (np.array) : right gauge tensor after optimization, shape (trun, bond)
-        """
+        
         bond_dim = Gamma.shape[0]
         trun_dim = truncate_dim
         if visualize:
@@ -499,11 +499,6 @@ class TensorNetwork():
             Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
             S = np.dot(Utmp, np.diag(stmp))
 
-            """Binv = np.linalg.inv(B)
-            Aprime = np.dot(Binv, A)
-            eig, w = np.linalg.eig(Aprime)
-            print(eig)"""
-
             ## step2
             R = oe.contract("ip,pq->qi",U,S).flatten()
             P = oe.contract("iIjJ,ij,QJ->QI",Gamma,sigma,Vh.conj()).flatten()
@@ -529,7 +524,7 @@ class TensorNetwork():
         U = np.dot(xinv, np.dot(U, S)) / np.sqrt(Fid)
         Vh = np.dot(Vh, yinv)
 
-        return U, Vh, Fid
+        return U, Vh, Fid"""
 
     
     def find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, gpu=False, visualize=False):
@@ -665,7 +660,7 @@ class TensorNetwork():
             try_idx = 0
 
             if trials == None:
-                trials = 1000
+                trials = 20
 
             while (try_idx < trials):
                 ## step1
@@ -699,6 +694,243 @@ class TensorNetwork():
                 ## step2
                 R = oe.contract("ip,pq->qi",U,S, backend="jax").flatten()
                 P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj(), backend="jax").flatten()
+                A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
+                B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+
+                Rmax = jax.numpy.dot(jax.numpy.linalg.pinv(B), P)
+                trace = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
+                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / trace
+                if visualize:
+                    print(f"fid at trial {try_idx} step2: {Fid}")
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
+                past_trace = trace
+
+                U, stmp, Vhtmp = jax.numpy.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
+                S = jax.numpy.dot(jax.numpy.diag(stmp), Vhtmp)
+
+                try_idx += 1
+            
+            if first_fid < past_fid:
+                #print(past_fid, first_fid)
+                #print(past_trace)
+                #print(np.sqrt(past_trace))
+                U = jax.numpy.dot(U, S) / jax.numpy.sqrt(past_trace)
+
+                return np.array(U), np.array(Vh), past_fid
+            else:
+                return np.array(firstU), np.array(firstVh), first_fid
+
+    
+    def fix_gauge_and_find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, gpu=False, visualize=False):
+        """find optimal truncation U, Vh given Gamma and trun_dim
+        Args:
+            Gamma (np.array) : env-tensor Gamma_iIjJ
+            turncate_dim (int) : target bond dimension
+            trials (int) : the number of iteration
+            visualize (bool) : print or not
+        Returns:
+            U (np.array) : left gauge tensor after optimization, shape (bond, trun)
+            Vh (np.array) : right gauge tensor after optimization, shape (trun, bond)
+        """
+        bond_dim = Gamma.shape[0]
+        trun_dim = truncate_dim
+        if visualize:
+            print(f"bond: {bond_dim}, trun: {trun_dim}")
+
+        # fix gauge
+        # step 1
+        leig, leigv = np.linalg.eig(Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1))
+        asc_order = np.argsort(np.abs(leig))
+        lambda0 = leig[asc_order[-1]]
+        L0 = leigv[:,asc_order[-1]]
+        reig, reigv = np.linalg.eig(Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1).T)
+        asc_order = np.argsort(np.abs(reig))
+        R0 = reigv[:,asc_order[-1]]
+
+        # step 2
+        L0 = L0 + 1e-10
+        R0 = R0 + 1e-10
+        ul, dl, ulh = np.linalg.svd(L0.reshape(Gamma.shape[0], -1), full_matrices=False)
+        ur, dr, urh = np.linalg.svd(R0.reshape(Gamma.shape[0], -1), full_matrices=False)
+
+        print(dl, dr)
+
+        # step 3
+        sigma_p = oe.contract("ab,bc,cd,de->ae",np.diag(np.sqrt(dl)),ul.conj().T,ur,np.diag(np.sqrt(dr)))
+        wl, sigma, wrh = np.linalg.svd(sigma_p, full_matrices=False)
+        print(sigma)
+        sigma = np.diag(sigma)
+        
+        # step 4
+        x = oe.contract("ab,bc,cd->ad",wl.conj().T,np.diag(np.sqrt(dl)),ul.conj().T)
+        y = oe.contract("ab,bc,cd->ad",ur,np.diag(np.sqrt(dr)),wrh.conj().T)
+        xinv = np.linalg.pinv(x)
+        yinv = np.linalg.pinv(y)
+
+        Gamma = oe.contract("iIjJ,ia,IA,bj,BJ->aAbB",Gamma,xinv,xinv.conj(),yinv,yinv.conj())
+
+        U, s, Vh = np.linalg.svd(sigma)
+        U = U[:,:trun_dim]
+        S = np.diag(s[:trun_dim])
+        Vh = Vh[:trun_dim, :]
+
+        truncated_s = np.diag(sigma)[trun_dim:]
+        if len(truncated_s[truncated_s>1e-9]) == 0:
+            # perfect truncation
+            Fid = 1.0
+            U = np.dot(xinv, np.dot(U, S))
+            Vh = np.dot(Vh, yinv)
+
+            return U, Vh, Fid
+
+        if not gpu and trun_dim < 8:
+            Fid = oe.contract("iIiI", Gamma)
+            if visualize:
+                print(f"Fid before truncation: {Fid}")
+
+            R = oe.contract("pq,qj->pj",S,Vh).flatten()
+            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+            A = oe.contract("a,b->ab",P,P.conj())
+            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+            Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
+            if visualize:
+                print(f"Fid before optimization: {Fid}")
+
+            past_fid = Fid
+            
+            Rmax = None
+
+            try_idx = 0
+
+            if trials == None:
+                trials = 1000
+
+            while (try_idx < trials):
+                ## step1
+                R = oe.contract("pq,qj->pj",S,Vh).flatten()
+                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+                A = oe.contract("a,b->ab",P,P.conj())
+                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+
+                #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
+
+                Rmax = np.dot(np.linalg.pinv(B), P)
+                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+                if visualize:
+                    print(f"fid at trial {try_idx} step1: {Fid}")
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
+
+                Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
+                S = np.dot(Utmp, np.diag(stmp))
+
+                """Binv = np.linalg.inv(B)
+                Aprime = np.dot(Binv, A)
+                eig, w = np.linalg.eig(Aprime)
+                print(eig)"""
+
+                ## step2
+                R = oe.contract("ip,pq->qi",U,S).flatten()
+                P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj()).flatten()
+                A = oe.contract("a,b->ab",P,P.conj())
+                B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+
+                Rmax = np.dot(np.linalg.pinv(B), P)
+                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+                if visualize:
+                    print(f"fid at trial {try_idx} step2: {Fid}")
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
+
+                U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
+                S = np.dot(np.diag(stmp), Vhtmp)
+
+                try_idx += 1
+            
+            trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
+            U = np.dot(U, S) / np.sqrt(trace)
+
+            return U, Vh, Fid
+        
+        else:
+            print("using jax")
+            Gamma = jax.numpy.array(Gamma)
+
+            sigma, U, S, Vh = jax.numpy.array(sigma), jax.numpy.array(U), jax.numpy.array(S), jax.numpy.array(Vh)
+
+            Fid = oe.contract("iIiI", Gamma, backend="jax")
+            if visualize:
+                print(f"Fid before truncation: {Fid}")
+
+            R = oe.contract("pq,qj->pj",S,Vh, backend="jax").flatten()
+            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,sigma,U.conj(), backend="jax").flatten()
+            A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
+            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="jax").reshape(trun_dim*bond_dim, -1)
+            trace = jax.numpy.dot(R.conj(), jax.numpy.dot(B, R))
+            Fid = jax.numpy.dot(R.conj(), jax.numpy.dot(A, R)) / trace
+            if visualize:
+                print(f"Fid before optimization: {Fid}")
+            
+            Rmax = None
+
+            past_fid = 0.0
+            past_trace = trace
+            first_fid = Fid
+            firstU = jax.numpy.dot(U, S) / np.sqrt(trace)
+            firstVh = Vh
+            try_idx = 0
+
+            if trials == None:
+                trials = 20
+
+            while (try_idx < trials):
+                ## step1
+                R = oe.contract("pq,qj->pj",S,Vh, backend="jax").flatten()
+                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,sigma,U.conj(), backend="jax").flatten()
+                A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
+                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj(), backend="jax").reshape(trun_dim*bond_dim, -1)
+
+                Rmax = jax.numpy.dot(jax.numpy.linalg.pinv(B), P)
+                trace = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(B, Rmax))
+                Fid = jax.numpy.dot(Rmax.conj(), jax.numpy.dot(A, Rmax)) / trace
+                if visualize:
+                    print(f"fid at trial {try_idx} step1: {Fid}")
+                if past_fid > Fid or Fid > 1.0 + 1e-6:
+                    print("numerically unstable")
+                    break
+                elif np.abs(Fid - past_fid) < 1e-5:
+                    print("no more improvement")
+                    break
+                past_fid = Fid
+                past_trace = trace
+
+                Utmp, stmp, Vh = jax.numpy.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
+                S = jax.numpy.dot(Utmp, jax.numpy.diag(stmp))
+
+                """Binv = jax.numpy.linalg.inv(B)
+                Aprime = jax.numpy.dot(Binv, A)
+                eig, w = jax.numpy.linalg.eig(Aprime)
+                print(eig)"""
+
+                ## step2
+                R = oe.contract("ip,pq->qi",U,S, backend="jax").flatten()
+                P = oe.contract("iIjJ,ij,QJ->QI",Gamma,sigma,Vh.conj(), backend="jax").flatten()
                 A = oe.contract("a,b->ab",P,P.conj(), backend="jax")
                 B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
 
