@@ -33,3 +33,6 @@ cuquantum*
 cuQuantum*
 *.yml
 gkpsurface*
+core*
+jet*
+taskflow

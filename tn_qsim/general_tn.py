@@ -543,7 +543,7 @@ class TensorNetwork():
         if visualize:
             print(f"bond: {bond_dim}, trun: {trun_dim}")
 
-        if not gpu and trun_dim < 8:
+        if not gpu:
             I = np.eye(bond_dim)
             U, s, Vh = np.linalg.svd(I)
             U = U[:,:trun_dim]
@@ -558,18 +558,23 @@ class TensorNetwork():
             P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
             A = oe.contract("a,b->ab",P,P.conj())
             B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-            Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
+            trace = np.dot(R.conj(), np.dot(B, R))
+            Fid = np.dot(R.conj(), np.dot(A, R)) / trace
             if visualize:
                 print(f"Fid before optimization: {Fid}")
 
             past_fid = Fid
             
             Rmax = None
-
+            past_fid = 0.0
+            past_trace = trace
+            first_fid = Fid
+            firstU = jax.numpy.dot(U, S) / np.sqrt(trace)
+            firstVh = Vh
             try_idx = 0
 
             if trials == None:
-                trials = 1000
+                trials = 20
 
             while (try_idx < trials):
                 ## step1
@@ -581,7 +586,8 @@ class TensorNetwork():
                 #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
 
                 Rmax = np.dot(np.linalg.pinv(B), P)
-                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+                trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
+                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
                 if visualize:
                     print(f"fid at trial {try_idx} step1: {Fid}")
                 if past_fid > Fid or Fid > 1.0 + 1e-6:
@@ -591,6 +597,7 @@ class TensorNetwork():
                     print("no more improvement")
                     break
                 past_fid = Fid
+                past_trace = trace
 
                 Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
                 S = np.dot(Utmp, np.diag(stmp))
@@ -607,7 +614,8 @@ class TensorNetwork():
                 B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
 
                 Rmax = np.dot(np.linalg.pinv(B), P)
-                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
+                trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
+                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
                 if visualize:
                     print(f"fid at trial {try_idx} step2: {Fid}")
                 if past_fid > Fid or Fid > 1.0 + 1e-6:
@@ -617,16 +625,19 @@ class TensorNetwork():
                     print("no more improvement")
                     break
                 past_fid = Fid
+                past_trace = trace
 
                 U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
                 S = np.dot(np.diag(stmp), Vhtmp)
 
                 try_idx += 1
             
-            trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
-            U = np.dot(U, S) / np.sqrt(trace)
+            if first_fid < past_fid:
+                U = np.dot(U, S) / np.sqrt(past_trace)
 
-            return U, Vh, Fid
+                return U, Vh, past_fid
+            else:
+                return firstU, firstVh, first_fid
         
         else:
             print("using jax")

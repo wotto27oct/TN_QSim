@@ -278,11 +278,12 @@ class PEPS(TensorNetwork):
         cp_nodes1, output_edge_order1 = self.__clear_dangling(cp_nodes[:self.n])
         cp_nodes2, output_edge_order2 = self.__clear_dangling(cp_nodes[self.n:])
         node_list = [node for node in cp_nodes1 + cp_nodes2]
+        output_edge_order = [edge for edge in output_edge_order1 + output_edge_order2]
 
         return node_list, output_edge_order
 
     
-    def calc_inner(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+    def calc_inner(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
         """calc inner product of PEPS state
 
         Args:
@@ -295,16 +296,15 @@ class PEPS(TensorNetwork):
             np.array: tensor after contraction
         """
 
-        node_list, output_edge_order = self.prepare_inner()
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_inner()
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
-        if tree is None and path is None:
-            tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit)
 
-        result = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
-        return result
-
-
-    def find_inner_tree(self, algorithm=None, memory_limit=None, visualize=False):
+    def find_inner_tree(self, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction path of inner product of PEPS state
 
         Args:
@@ -319,8 +319,11 @@ class PEPS(TensorNetwork):
 
         node_list, output_edge_order = self.prepare_inner()
 
-        tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        return tree, cost, sp_cost
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
+
+        return tn, tree
 
     
     def visualize_inner_tree(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
@@ -381,7 +384,7 @@ class PEPS(TensorNetwork):
         return cp_nodes, output_edge_order
 
 
-    def apply_MPO(self, tidx, mpo):
+    #def apply_MPO(self, tidx, mpo):
         """ apply MPO
         
         Args:
@@ -389,7 +392,7 @@ class PEPS(TensorNetwork):
             mpo (MPO) : MPO tensornetwork.
         """
 
-        def return_dir(diff):
+        """def return_dir(diff):
             if diff == -self.width:
                 return 1
             elif diff == 1:
@@ -440,10 +443,12 @@ class PEPS(TensorNetwork):
                 edge_list[i+1].pop()
         
         for i in range(len(tidx)):
-            self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])
+            self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])"""
 
+    def apply_MPO_with_truncation(self, tidx, mpo, truncate_dimNone, last_dir=None):
+        return self.apply_MPO(tidx, mpo, truncate_dimNone, last_dir=None)
     
-    def apply_MPO_with_truncation(self, tidx, mpo, truncate_dim=None):
+    def apply_MPO(self, tidx, mpo, truncate_dim=None, last_dir=None):
         """ apply MPO with simple update
         
         Args:
@@ -515,7 +520,7 @@ class PEPS(TensorNetwork):
                     # contract left_R, right_R, node
                     svd_node_edge_list = None
                     svd_node_list = [lR, rR, node]
-                    if i == mpo.n - 1:
+                    if i == mpo.n - 1 and last_dir is None:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[3], one[0])
                         svd_node_edge_list = [qr_left_edge, node[0], qr_right_edge]
@@ -526,14 +531,23 @@ class PEPS(TensorNetwork):
 
                     # split via SVD for truncation
                     U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], truncate_dim)
+
+                    # reorder and flatten edges
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 4)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
-                    if i == mpo.n - 1:
+                    new_node = None
+                    if i == mpo.n - 1 and last_dir is None:
                         r_edge_order = [Vh[1]] + [rQ.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rQ.edges[i] for i in range((dir+1)%4, 3)]
-                        node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
+                        new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
                     else:
                         r_edge_order = [Vh[1]] + [rQ.edges[i] for i in range(0, (dir+1)%4)] + [s[0]] + [rQ.edges[i] for i in range((dir+1)%4, 3)] + [Vh[2]]
-                        node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
+                        new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
+                        if i == mpo.n-1 and last_dir is not None:
+                            tn.flatten_edges([new_node[last_dir], new_node[5]])
+                            reorder_list = [new_node[i] for i in range(last_dir)] + [new_node[4]] + [new_node[i] for i in range(last_dir, 4)]
+                            new_node.reorder_edges(reorder_list)
+
+                    node_list.append(new_node)
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
