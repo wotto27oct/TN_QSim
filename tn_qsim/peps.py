@@ -445,8 +445,8 @@ class PEPS(TensorNetwork):
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i].reorder_edges(edge_list[i])"""
 
-    def apply_MPO_with_truncation(self, tidx, mpo, truncate_dimNone, last_dir=None):
-        return self.apply_MPO(tidx, mpo, truncate_dimNone, last_dir=None)
+    def apply_MPO_with_truncation(self, tidx, mpo, truncate_dim=None, last_dir=None):
+        return self.apply_MPO(tidx, mpo, truncate_dim=truncate_dim, last_dir=last_dir)
     
     def apply_MPO(self, tidx, mpo, truncate_dim=None, last_dir=None):
         """ apply MPO with simple update
@@ -473,6 +473,9 @@ class PEPS(TensorNetwork):
 
         edge_list = []
         node_list = []
+
+        # not accurate
+        total_fidelity = 1.0
 
         if len(tidx) == 1:
             node = mpo.nodes[0]
@@ -530,7 +533,13 @@ class PEPS(TensorNetwork):
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], truncate_dim)
+                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], truncate_dim)
+
+                    # calc fidelity
+                    s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+                    trun_s_sq = np.dot(trun_s, trun_s)
+                    fidelity = s_sq / (s_sq + trun_s_sq)
+                    total_fidelity *= fidelity
 
                     # reorder and flatten edges
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 4)]
@@ -551,6 +560,8 @@ class PEPS(TensorNetwork):
 
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
+
+        return total_fidelity
 
     
     def prepare_Gamma(self, trun_node_idx):
