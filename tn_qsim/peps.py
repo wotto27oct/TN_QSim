@@ -63,6 +63,23 @@ class PEPS(TensorNetwork):
             virtual_dims.append(h_virtual_dims)
         return virtual_dims
 
+    
+    def prepare_contract(self):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+
+        # if there are dangling edges which dimension is 1, contract first
+        cp_nodes, output_edge_order = self.__clear_dangling(cp_nodes)
+
+        node_list = [node for node in cp_nodes]
+
+        """for i in range(self.n):
+            for dangling in cp_nodes[i].get_all_dangling():
+                output_edge_order.append(dangling)"""
+        for i in range(self.n):
+            output_edge_order.append(cp_nodes[i][0])
+
+        return node_list, output_edge_order
+
 
     def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
         """contract PEPS and generate full state
@@ -260,6 +277,8 @@ class PEPS(TensorNetwork):
             fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=True)
             #print("bmps mps-dim", mps.virtual_dims)
             total_fid = total_fid * fid
+            print(f"fidelity: {fid}")
+            print(f"total fidelity: {total_fid}")
 
         return mps.contract().flatten()   
         #return mps.contract().flatten()[0]
