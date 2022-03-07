@@ -64,14 +64,25 @@ class MPSgrouping(TensorNetwork):
     def prepare_contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
         output_edge_order = []
-        # if right-left dim is not 1, remain them
-        if cp_nodes[0].get_dimension(len(cp_nodes[0].tensor.shape)-2) != 1:
-            output_edge_order.append(cp_nodes[0][-2])
-        if cp_nodes[self.n-1].get_dimension(len(cp_nodes[self.n-1].tensor.shape)-1) != 1:
-            output_edge_order.append(cp_nodes[self.n-1][-1])
+        def clear_dangling(node_idx, dangling_index):
+            one = tn.Node(np.array([1]))
+            tn.connect(cp_nodes[node_idx][dangling_index], one[0])
+            edge_order = cp_nodes[node_idx][:dangling_index] + cp_nodes[node_idx][dangling_index+1:]
+            cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
+
         for i in range(self.n):
-            for j in range(len(cp_nodes[i].tensor.shape)-2):
+            for j in range(len(cp_nodes[i].edges)-2):
                 output_edge_order.append(cp_nodes[i][j])
+
+        # if right-left dim is not 1, remain them
+        if cp_nodes[0].get_dimension(len(cp_nodes[0].edges)-2) != 1:
+            output_edge_order.append(cp_nodes[0][-2])
+        else:
+            clear_dangling(0, len(cp_nodes[0].edges)-2)
+        if cp_nodes[self.n-1].get_dimension(len(cp_nodes[self.n-1].edges)-1) != 1:
+            output_edge_order.append(cp_nodes[self.n-1][-1])
+        else:
+            clear_dangling(self.n-1, len(cp_nodes[self.n-1].edges)-1)
         node_list = [node for node in cp_nodes]
         return node_list, output_edge_order
     
@@ -95,7 +106,7 @@ class MPSgrouping(TensorNetwork):
         return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
 
-    def find_contract_tree(self, algorithm=None, seq="ADCRS", visualize=False):
+    def find_contraction(self, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction tree of the contract of MPS
 
         Args:
@@ -116,12 +127,8 @@ class MPSgrouping(TensorNetwork):
 
         return tn, tree
 
-
     def contract(self):
-        cp_nodes = tn.replicate_nodes(self.nodes)
-        output_edge_order = [cp_nodes[0][1], cp_nodes[self.n-1][2]]
-        for i in range(self.n):
-            output_edge_order.append(cp_nodes[i][0])
+        cp_nodes, output_edge_order = self.prepare_contract()
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
         
 
@@ -154,17 +161,17 @@ class MPSgrouping(TensorNetwork):
         for idx, q in enumerate(qidx):
             nlist.append(mpo.nodes[idx][0])
             tn.connect(mpo.nodes[idx][1], self.nodes[tidx][q])
-        buff = 0
+        #buff = len(qidx)
+
+        # edges after apply_MPO
         transpose_list = [q for q in qidx]
         for i in range(len(self.nodes[tidx].edges)-2):
             if i not in qidx:
                 nlist.append(self.nodes[tidx][i])
-                transpose_list.append(buff)
-                buff += 1
+                transpose_list.append(i)
+                #buff += 1
         index_list = np.argsort(np.array(transpose_list))
-        #print(index_list)
         node_edge_list = [nlist[e] for e in index_list] + self.nodes[tidx][-2:]
-        #print(node_edge_list)
         self.nodes[tidx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
 
         return 
