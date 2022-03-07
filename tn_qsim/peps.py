@@ -280,7 +280,7 @@ class PEPS(TensorNetwork):
             print(f"fidelity: {fid}")
             print(f"total fidelity: {total_fid}")
 
-        return mps.contract().flatten()   
+        return mps.contract().flatten(), total_fid
         #return mps.contract().flatten()[0]
 
     

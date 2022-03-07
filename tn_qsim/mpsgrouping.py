@@ -125,6 +125,50 @@ class MPSgrouping(TensorNetwork):
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
         
 
+    def apply_single_MPO(self, tidx, qidx, mpo):
+        """ apply MPO to the single tensor
+
+        Args:
+            tidx (int) : tensor index we apply to.
+            qidx (list of int) : qubit index we apply to.
+            mpo (MPO) : MPO tensornetwork.
+        """
+
+        # apexをtidxに合わせる
+        if self.apex is not None:
+            if tidx < self.apex:
+                for _ in range(self.apex - tidx):
+                    self.__move_left_canonical()
+            elif tidx > self.apex:
+                for _ in range(tidx - self.apex):
+                    self.__move_right_canonical()
+
+        node_contract_list = [self.nodes[tidx]] + mpo.nodes
+        nlist = []
+        one = tn.Node(np.array([1]))
+        tn.connect(mpo.nodes[0][2], one[0])
+        node_contract_list.append(one)
+        one2 = tn.Node(np.array([1]))
+        tn.connect(mpo.nodes[-1][3], one2[0])
+        node_contract_list.append(one2)
+        for idx, q in enumerate(qidx):
+            nlist.append(mpo.nodes[idx][0])
+            tn.connect(mpo.nodes[idx][1], self.nodes[tidx][q])
+        buff = 0
+        transpose_list = [q for q in qidx]
+        for i in range(len(self.nodes[tidx].edges)-2):
+            if i not in qidx:
+                nlist.append(self.nodes[tidx][i])
+                transpose_list.append(buff)
+                buff += 1
+        index_list = np.argsort(np.array(transpose_list))
+        #print(index_list)
+        node_edge_list = [nlist[e] for e in index_list] + self.nodes[tidx][-2:]
+        #print(node_edge_list)
+        self.nodes[tidx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+        return 
+
 
     def apply_MPO(self, tidx, mpo, is_normalize=True):
         """ apply MPO
