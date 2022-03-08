@@ -383,17 +383,17 @@ class PEPS(TensorNetwork):
             if cp_nodes[h*self.width].get_dimension(4) == 1:
                 clear_dangling(h*self.width, 4)
             else:
-                output_edge_order.append(cp_nodes[h*self.width][1])
+                output_edge_order.append(cp_nodes[h*self.width][4])
         for w in range(self.width):
             if cp_nodes[self.width*(self.height-1)+w].get_dimension(3) == 1:
                 clear_dangling(self.width*(self.height-1)+w, 3)
             else:
-                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][1])
+                output_edge_order.append(cp_nodes[self.width*(self.height-1)+w][3])
         for h in range(self.height):
             if cp_nodes[(h+1)*self.width-1].get_dimension(2) == 1:
                 clear_dangling((h+1)*self.width-1, 2)
             else:
-                output_edge_order.append(cp_nodes[(h+1)*self.width-1][1])
+                output_edge_order.append(cp_nodes[(h+1)*self.width-1][2])
         for w in range(self.width):
             if cp_nodes[w].get_dimension(1) == 1:
                 clear_dangling(w, 1)

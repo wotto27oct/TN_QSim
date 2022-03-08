@@ -1,3 +1,4 @@
+from platform import node
 import numpy as np
 import opt_einsum as oe
 import tensornetwork as tn
@@ -130,6 +131,63 @@ class MPSgrouping(TensorNetwork):
     def contract(self):
         cp_nodes, output_edge_order = self.prepare_contract()
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
+
+    
+    def prepare_amplitude(self, tensors):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        node_list = []
+        output_edge_order = []
+        def clear_dangling(node_idx, dangling_index):
+            one = tn.Node(np.array([1]))
+            tn.connect(cp_nodes[node_idx][dangling_index], one[0])
+            edge_order = cp_nodes[node_idx][:dangling_index] + cp_nodes[node_idx][dangling_index+1:]
+            cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
+
+        idx = 0
+        for i in range(self.n):
+            for j in range(len(cp_nodes[i].edges)-2):
+                if tensors[idx] is None:
+                    output_edge_order.append(cp_nodes[i][j])
+                else:
+                    state = tn.Node(tensors[idx].conj())
+                    tn.connect(cp_nodes[i][j], state[0])
+                    node_list.append(state)
+                idx += 1
+
+        # if right-left dim is not 1, remain them
+        if cp_nodes[0].get_dimension(len(cp_nodes[0].edges)-2) != 1:
+            output_edge_order.append(cp_nodes[0][-2])
+        else:
+            clear_dangling(0, len(cp_nodes[0].edges)-2)
+        if cp_nodes[self.n-1].get_dimension(len(cp_nodes[self.n-1].edges)-1) != 1:
+            output_edge_order.append(cp_nodes[self.n-1][-1])
+        else:
+            clear_dangling(self.n-1, len(cp_nodes[self.n-1].edges)-1)
+        
+        node_list += [node for node in cp_nodes]
+        
+        print(len(node_list))
+        print(len(output_edge_order))
+        return node_list, output_edge_order
+
+
+    def amplitude(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """contract amplitude with given product states by using quimb (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        if tn is None:
+            node_list, output_edge_order = self.prepare_amplitude(tensors)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
         
 
     def apply_single_MPO(self, tidx, qidx, mpo):
