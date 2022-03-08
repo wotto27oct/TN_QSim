@@ -40,7 +40,7 @@ class MPSgrouping(TensorNetwork):
     def virtual_dims(self):
         virtual_dims = [self.nodes[0].get_dimension(len(self.nodes[0].tensor.shape)-2)]
         for i in range(self.n):
-            virtual_dims.append(self.nodes[i].get_dimension(len(self.nodes[0].tensor.shape)-1))
+            virtual_dims.append(self.nodes[i].get_dimension(len(self.nodes[i].tensor.shape)-1))
         return virtual_dims
 
 
