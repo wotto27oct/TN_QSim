@@ -100,7 +100,7 @@ class MERA(TensorNetwork):
     def prepare_inner(self):
         node_list1, output_edge_order1 = self.prepare_contract()
         node_list2, output_edge_order2 = self.prepare_contract()
-        for node in node_list1:
+        for node in node_list2:
             node.tensor = node.tensor.conj()
 
         for q in range(2**self.depth):
@@ -267,6 +267,64 @@ class MERA(TensorNetwork):
 
         if tn is None:
             node_list, output_edge_order = self.prepare_foliation(cut_list)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    
+    def prepare_grad_foliation(self, tidx, output_list):
+        node_list1, output_edge_order1 = self.prepare_contract()
+        node_list2, output_edge_order2 = self.prepare_contract()
+        for node in node_list2:
+            node.tensor = node.tensor.conj()
+        for q in range(2**self.depth):
+            tn.connect(output_edge_order1[q], output_edge_order2[q])
+
+        node_list = []
+        output_edge_order = []
+        for nidx, eidx in output_list:
+            output_edge_order.append(node_list1[nidx][eidx])
+        for t in tidx:
+            node_list.append(node_list1[t])
+        node_list += node_list2
+
+        return node_list, output_edge_order
+
+
+    def find_calc_grad_foliation(self, tidx, output_list, algorithm=None, seq="ADCRS", visualize=False):
+        """find calc_foliation contraction path by using quimb
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+
+        node_list, output_edge_order = self.prepare_grad_foliation(tidx, output_list)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+
+    def calc_grad_foliation(self, tidx=None, output_list=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """calc foliation of MERA state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_grad_foliation(tidx, output_list)
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
