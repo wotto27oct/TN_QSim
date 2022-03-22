@@ -365,6 +365,60 @@ class PEPS(TensorNetwork):
 
         self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
         return
+
+    
+    def prepare_foliation(self, cut_list):
+        node_list, output_edge_order = self.prepare_inner()
+
+        rho_edge_order1 = []
+        rho_edge_order2 = []
+        for node_idx1, edge_idx1, node_idx2, edge_idx2 in cut_list:
+            node_list[node_idx1][edge_idx1].disconnect()
+            rho_edge_order1.append(node_list[node_idx1][edge_idx1])
+            rho_edge_order2.append(node_list[node_idx2][edge_idx2])
+        
+        output_edge_order = rho_edge_order1 + rho_edge_order2
+
+        return node_list, output_edge_order
+
+
+    def find_calc_foliation(self, cut_list, algorithm=None, seq="ADCRS", visualize=False):
+        """find calc_foliation contraction path by using quimb
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+
+        node_list, output_edge_order = self.prepare_foliation(cut_list)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+
+    def calc_foliation(self, cut_list=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """calc foliation of MERA state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_foliation(cut_list)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
     
     
     def __clear_dangling(self, cp_nodes):
