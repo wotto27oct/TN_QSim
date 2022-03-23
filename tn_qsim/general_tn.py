@@ -1,4 +1,3 @@
-from re import T
 import numpy as np
 import opt_einsum as oe
 import cotengra as ctg
@@ -11,8 +10,8 @@ from tn_qsim.utils import from_nodes_to_str
 import jax
 from concurrent.futures import ThreadPoolExecutor
 from jax.interpreters import xla
-import numba
 import functools
+from tn_qsim.utils import from_tn_to_quimb
 #import cupy as cp
 
 class TensorNetwork():
@@ -56,7 +55,7 @@ class TensorNetwork():
                     node_edges[j].set_name(f"edge {edges[i][j]}")
 
 
-    def contract(self, output_edge_order=None):
+    def contract_old(self, output_edge_order=None):
         """contract the whole Tensor Network destructively
 
         Args:
@@ -70,6 +69,54 @@ class TensorNetwork():
             return tn.contractors.auto(self.nodes, ignore_edge_order=True).tensor
 
         return tn.contractors.auto(self.nodes, output_edge_order=output_edge_order).tensor
+
+    
+    def prepare_contract(self, output_edge_list):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        output_edge_order = []
+        for nidx, eidx in output_edge_list:
+            output_edge_order.append(cp_nodes[nidx][eidx])
+        node_list = [node for node in cp_nodes]
+
+        return node_list, output_edge_order
+
+
+    def find_contraction_tree(self, output_edge_list, algorithm=None, seq="ADCRS", visualize=False):
+        """contract the whole Tensor Network
+
+        Args:
+            output_edge_order (list of list of int) : [node, edge_idx],...
+        
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        node_list, output_edge_order = self.prepare_contract(output_edge_list)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+    
+    def contract(self, output_edge_list, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """contract MERA and generate full state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_contract(output_edge_list)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
 
 
     def visualize_tree(self, tree, node_list, output_edge_order=None, path=None, visualize=False):
