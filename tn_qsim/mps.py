@@ -2,6 +2,7 @@ import numpy as np
 import opt_einsum as oe
 import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
+from tn_qsim.utils import from_tn_to_quimb
 
 class MPS(TensorNetwork):
     """class of MPS
@@ -59,6 +60,155 @@ class MPS(TensorNetwork):
         for i in range(self.n):
             output_edge_order.append(cp_nodes[i][0])
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
+
+
+    def prepare_inner(self):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        output_edge_order = []
+
+        def clear_dangling(node_idx, dangling_index):
+            one = tn.Node(np.array([1]))
+            tn.connect(cp_nodes[node_idx][dangling_index], one[0])
+            edge_order = []
+            for i in range(len(cp_nodes[node_idx].edges)):
+                if i != dangling_index:
+                    edge_order.append(cp_nodes[node_idx][i])
+            cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
+
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        clear_dangling(0, 1)
+        clear_dangling(self.n, 1)
+        clear_dangling(self.n-1, 2)
+        clear_dangling(2*self.n-1, 2)
+        node_list = [node for node in cp_nodes]
+
+        return node_list, output_edge_order
+
+    
+    def calc_inner(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
+        """calc inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_inner()
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
+
+
+    def find_inner_tree(self, algorithm=None, seq="ADCRS", visualize=False):
+        """find contraction path of inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_inner()
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
+
+        return tn, tree
+
+    
+    def visualize_inner_tree(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """find contraction path of inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_inner()
+
+        if tree is None and path is None:
+            raise ValueError("tree or path is needed for visualization")
+
+        self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
+        return
+
+    
+    def prepare_foliation(self, cut_list):
+        node_list, output_edge_order = self.prepare_inner()
+
+        rho_edge_order1 = []
+        rho_edge_order2 = []
+        for node_idx1, edge_idx1, node_idx2, edge_idx2 in cut_list:
+            if node_list[node_idx1][edge_idx1] != node_list[node_idx2][edge_idx2]:
+                print("error! cut_list is not correct", node_idx1, edge_idx1)
+            node_list[node_idx1][edge_idx1].disconnect()
+            rho_edge_order1.append(node_list[node_idx1][edge_idx1])
+            rho_edge_order2.append(node_list[node_idx2][edge_idx2])
+        
+        output_edge_order = rho_edge_order1 + rho_edge_order2
+
+        return node_list, output_edge_order
+
+
+    def find_calc_foliation(self, cut_list, algorithm=None, seq="ADCRS", visualize=False):
+        """find calc_foliation contraction path by using quimb
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+
+        node_list, output_edge_order = self.prepare_foliation(cut_list)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+
+    def calc_foliation(self, cut_list=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """calc foliation of MERA state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_foliation(cut_list)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
         
 
     def apply_gate(self, tidx, gtensor):

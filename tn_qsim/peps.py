@@ -233,7 +233,11 @@ class PEPS(TensorNetwork):
             if w == 0:
                 mps_node.append(tensor.reshape(shape[0], 1, shape[1]))
             elif w == self.width - 1:
-                mps_node.append(tensor.reshape(shape[0], shape[1], 1))
+                # In case right-bond dim is not 1
+                if len(shape) == 3:
+                    mps_node.append(tensor.reshape(shape[0], shape[1], shape[2]).transpose(0,2,1))
+                else:
+                    mps_node.append(tensor.reshape(shape[0], shape[1], 1))
             else:
                 mps_node.append(tensor.reshape(shape[0], shape[1], shape[2]).transpose(0,2,1))
 
@@ -373,6 +377,8 @@ class PEPS(TensorNetwork):
         rho_edge_order1 = []
         rho_edge_order2 = []
         for node_idx1, edge_idx1, node_idx2, edge_idx2 in cut_list:
+            if node_list[node_idx1][edge_idx1] != node_list[node_idx2][edge_idx2]:
+                print("error! cut_list is not correct", node_idx1, edge_idx1)
             node_list[node_idx1][edge_idx1].disconnect()
             rho_edge_order1.append(node_list[node_idx1][edge_idx1])
             rho_edge_order2.append(node_list[node_idx2][edge_idx2])
