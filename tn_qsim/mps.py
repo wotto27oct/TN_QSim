@@ -301,7 +301,7 @@ class MPS(TensorNetwork):
         return total_fidelity
 
 
-    def apply_MPO(self, tidx, mpo, is_normalize=True):
+    def apply_MPO(self, tidx, mpo, is_normalize=True, is_return_history=False):
         """ apply MPO
 
         Args:
@@ -387,7 +387,7 @@ class MPS(TensorNetwork):
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threthold_err)
                     
                     # calc fidelity for normalization
                     s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
