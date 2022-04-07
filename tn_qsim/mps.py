@@ -334,6 +334,7 @@ class MPS(TensorNetwork):
             
         edge_list = []
         node_list = []
+        mps_list = []
         if len(tidx) == 1:
             node = mpo.nodes[0]
             node_contract_list = [node, self.nodes[tidx[0]]]
@@ -409,6 +410,10 @@ class MPS(TensorNetwork):
                         else:
                             r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]] + [Vh[2]]
                     node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
+                
+                if is_return_history:
+                    tmp_mps_list = tn.replicate_nodes(node_list + self.nodes[len(node_list):])
+                    mps_list.append(tmp_mps_list)
                     
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
@@ -419,7 +424,10 @@ class MPS(TensorNetwork):
         if is_normalize:
             self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
         
-        return total_fidelity
+        if not is_return_history:
+            return total_fidelity
+        else:
+            return total_fidelity, mps_list
 
 
     def sample(self, seed=0):
