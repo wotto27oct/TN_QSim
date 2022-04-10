@@ -81,6 +81,45 @@ class PEPS(TensorNetwork):
         return node_list, output_edge_order
 
 
+    def find_contract_by_quimb(self, algorithm=None, seq="ADCRS", visualize=False):
+        """contract amplitude with given product states by using quimb (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        node_list, output_edge_order = self.prepare_contract()
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+    
+    def contract_by_quimb(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """contract amplitude with given product states by using quimb (typically computational basis)
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+        
+        if tn is None:
+            node_list, output_edge_order = self.prepare_amplitude()
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+
     def contract(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
         """contract PEPS and generate full state
 
@@ -140,6 +179,7 @@ class PEPS(TensorNetwork):
         result = self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
         return result
 
+
     def prepare_amplitude(self, tensors):
         cp_nodes = tn.replicate_nodes(self.nodes)
 
@@ -163,6 +203,7 @@ class PEPS(TensorNetwork):
                 state.tensor = None
 
         return node_list, output_edge_order
+
 
     def find_amplitude_tree_by_quimb(self, tensors, algorithm=None, seq="ADCRS", visualize=False):
         """contract amplitude with given product states by using quimb (typically computational basis)
