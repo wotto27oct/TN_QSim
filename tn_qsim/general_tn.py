@@ -118,7 +118,6 @@ class TensorNetwork():
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
 
-
     def visualize_tree(self, tree, node_list, output_edge_order=None, path=None, visualize=False):
         """calc contraction cost and visualize contract path for given tree and nodes
 

@@ -80,10 +80,6 @@ class MERA3D(TensorNetwork):
 
         Args:
             algorithm : the algorithm to find contraction path
-            memory_limit : the maximum sp cost in contraction path
-            tree (ctg.ContractionTree) : the contraction tree
-            path (list of tuple of int) : the contraction path
-            visualize (bool) : if visualize whole contraction process
         Returns:
             np.array: tensor after contraction
         """
@@ -94,6 +90,24 @@ class MERA3D(TensorNetwork):
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
     
+    def visualize_renormalization(self, tn, tree):
+        """calc contraction cost and visualize contract path for given tree and nodes
+
+        Args:
+            tn (TensorNetwork) : the tensor network
+            tree (ctg.ContractionTree) : the contraction tree
+        """
+
+        node_list, output_edge_order = self.prepare_renormalize()
+
+        #tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        print(f"contraction cost: {tree.contraction_cost():,} peak size: {tree.peak_size():,}")
+        print(tree.get_ssa_path())
+        print(tree.flat_tree())
+        tree.print_contractions()
+
+        exit()
 
     def apply_isometry(self, input_support, output_support, tensor):
         """ apply Unitary or Isometry
@@ -122,3 +136,6 @@ class MERA3D(TensorNetwork):
         for idx, tidx in enumerate(output_support):
             self.top_edges[tidx] = [len(self.top_nodes)-1, idx]
             self.down_edges[tidx] = [len(self.down_nodes)-1, idx]
+
+    
+    
