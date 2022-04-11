@@ -18,8 +18,7 @@ class MERA3D(TensorNetwork):
     Attributes:
         n (int) : the number of qubits
         Hnode (tn.Node) : Hamiltonian which we renormalize
-        top_edges (list of tn.Edge) : the list of top edges
-        down_edges (list of tn.Edge) : the list of down edges
+        top_edges (list of (int, int)) : the list of top edges
         top_nodes (list of tn.Node) : the list of nodes
         down_nodes (list of tn.Node) : the list of adjoint nodes
     """
@@ -28,27 +27,29 @@ class MERA3D(TensorNetwork):
         self.n = n
         self.top_edges = [None for _ in range(n)]
         self.down_edges = [None for _ in range(n)]
-        self.nodes = []
         self.Hnode = tn.Node(H)
+        self.top_nodes = [self.Hnode]
+        self.down_nodes = [self.Hnode]
         for idx, t in enumerate(tidx):
-            self.top_edges[t] = self.Hnode[idx]
-            self.down_edges[t] = self.Hnode[idx+len(tidx)]
+            self.top_edges[t] = [0, idx]
+            self.down_edges[t] = [0, len(tidx)+idx]
 
     
     def prepare_renormalize(self):
-        cp_top_nodes = tn.replicate_nodes(self.top_nodes)
-        cp_down_nodes = tn.replicate_nodes(self.down_nodes)
-
-        node_list = [self.Hnode] + cp_top_nodes + cp_down_nodes
+        node_list = tn.replicate_nodes(self.top_nodes + self.down_nodes[1:])
 
         # output edge of renormalized Hamiltonian
         output_edge_order = []
         for i in range(self.n):
             if self.top_edges[i] is not None:
-                output_edge_order.append(self.top_edges[i])
+                output_edge_order.append(node_list[self.top_edges[i][0]][self.top_edges[i][1]])
         for i in range(self.n):
             if self.down_edges[i] is not None:
-                output_edge_order.append(self.down_edges[i])
+                # if 0, then Hamiltonian
+                if self.down_edges[i][0] == 0:
+                    output_edge_order.append(node_list[0][self.down_edges[i][1]])
+                else:
+                    output_edge_order.append(node_list[len(self.top_nodes)+self.down_edges[i][0]-1][self.down_edges[i][1]])
         
         return node_list, output_edge_order
 
@@ -111,52 +112,13 @@ class MERA3D(TensorNetwork):
             if self.top_edges[tidx] is None:
                 tn.connect(Unode[idx+len(output_support)], Adnode[idx+len(output_support)])
             else:
-                tn.connect(Unode[idx+len(output_support)], self.top_edges[tidx])
-                tn.connect(Adnode[idx+len(output_support)], self.down_edges[tidx])
+                tn.connect(Unode[idx+len(output_support)], self.top_nodes[self.top_edges[tidx][0]][self.top_edges[tidx][1]])
+                tn.connect(Adnode[idx+len(output_support)], self.down_nodes[self.down_edges[tidx][0]][self.down_edges[tidx][1]])
         
         for tidx in input_support:
             self.top_edges[tidx] = None
             self.down_edges[tidx] = None
         
         for idx, tidx in enumerate(output_support):
-            self.top_edges[tidx] = Unode[idx]
-            self.down_edges[tidx] = Adnode[idx]
-    
-
-    def apply_MPO(self, tidx, mpo):
-        """ apply MPO
-        
-        Args:
-            tidx (list of int) : list of qubit index we apply to.
-            mpo (MPO) : MPO tensornetwork.
-        """
-
-        if len(tidx) == 1:
-            node = mpo.nodes[0]
-            node_contract_list = [node]
-            node_edge_list = [node[0], node[1]]
-            one = tn.Node(np.array([1]))
-            tn.connect(node[2], one[0])
-            node_contract_list.append(one)
-            one2 = tn.Node(np.array([1]))
-            tn.connect(node[3], one2[0])
-            node_contract_list.append(one2)
-            self.past_nodes.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
-            tn.connect(self.past_nodes[-1][1], self.past_nodes[self.top_edges[tidx[0]][0]][self.top_edges[tidx[0]][1]])
-            self.top_edges[tidx[0]] = [len(self.past_nodes)-1, 0]
-        else:
-            # multi qubit gate - leave it
-            for i, node in enumerate(mpo.nodes):
-                if i == 0:
-                    one = tn.Node(np.array([1]))
-                    tn.connect(node[2], one[0])
-                    node_edge_list = [node[e] for e in range(len(node.edges)) if e != 2]
-                    node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
-                elif i == mpo.n - 1:
-                    one = tn.Node(np.array([1]))
-                    tn.connect(node[3], one[0])
-                    node_edge_list = [node[e] for e in range(len(node.edges)) if e != 3]
-                    node = tn.contractors.auto([node, one], output_edge_order=node_edge_list)
-                tn.connect(node[1], self.past_nodes[self.top_edges[tidx[i]][0]][self.top_edges[tidx[i]][1]])
-                self.past_nodes.append(node)
-                self.top_edges[tidx[i]] = [len(self.past_nodes)-1, 0]
+            self.top_edges[tidx] = [len(self.top_nodes)-1, idx]
+            self.down_edges[tidx] = [len(self.down_nodes)-1, idx]
