@@ -107,8 +107,6 @@ class MERA3D(TensorNetwork):
         print(tree.flat_tree())
         tree.print_contractions()
 
-        exit()
-
     def apply_isometry(self, input_support, output_support, tensor):
         """ apply Unitary or Isometry
         
