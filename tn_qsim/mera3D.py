@@ -4,6 +4,8 @@ import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
 from tn_qsim.mpo import MPO
 from tn_qsim.utils import from_tn_to_quimb
+import jax
+import functools
 
 class MERA3D(TensorNetwork):
     """class of infinite MERA3D
@@ -89,6 +91,27 @@ class MERA3D(TensorNetwork):
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    def gen_renormalize_func(self, tree, gpunum):
+        """generate renormalization function
+
+        Args:
+            tree (ctg.ContractionTree) : the contraction tree for renormalization
+            gpunum (int) : the number of GPU we use
+        Returns:
+            func : get sliced arrays and return renormalized hamiltonian
+        """
+
+        gpus = jax.devices('gpu')
+        contract_jit = jax.jit(functools.partial(tree.contract_core, backend="jax"), device=gpus[gpunum])
+
+        def renormalize_func(arrays):
+            value = 0.0
+            for i in range(tree.nslices):
+                value += contract_jit(tree.slice_arrays(arrays, i))
+            return value
+        return renormalize_func
+        #return jax.jit(functools.partial(tree.contract_core, backend="jax"), device=gpus[gpunum])
     
     def visualize_renormalization(self, tn, tree):
         """calc contraction cost and visualize contract path for given tree and nodes
@@ -119,6 +142,14 @@ class MERA3D(TensorNetwork):
         Adnode = tn.Node(tensor.conj())
         self.top_nodes.append(Unode)
         self.down_nodes.append(Adnode)
+        # cancel isometry
+        for idx, tidx in enumerate(input_support):
+            if self.top_edges[tidx] is not None:
+                break
+            if idx == len(input_support)-1:
+                # apply nothing
+                return
+                
         # connect edges
         for idx, tidx in enumerate(input_support):
             if self.top_edges[tidx] is None:
