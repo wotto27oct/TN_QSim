@@ -352,7 +352,7 @@ class TensorNetwork():
         if is_visualize:
             print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} nslice: {tree_s.nslices}")
 
-        if gpu and tree_s.total_flops() > 1e2:
+        if gpu and tree_s.total_flops() > 1e8:
             gpus = jax.devices('gpu')
             print(gpus)
             pnum = len(gpus)
