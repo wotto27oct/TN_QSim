@@ -103,15 +103,7 @@ class MERA3D(TensorNetwork):
         """
 
         gpus = jax.devices('gpu')
-        contract_jit = jax.jit(functools.partial(tree.contract_core, backend="jax"), device=gpus[gpunum])
-
-        def renormalize_func(arrays):
-            value = 0.0
-            for i in range(tree.nslices):
-                value += contract_jit(tree.slice_arrays(arrays, i))
-            return value
-        return renormalize_func
-        #return jax.jit(functools.partial(tree.contract_core, backend="jax"), device=gpus[gpunum])
+        return jax.jit(functools.partial(tree.contract_core, backend="jax"), device=gpus[i]))
     
     def visualize_renormalization(self, tn, tree):
         """calc contraction cost and visualize contract path for given tree and nodes
