@@ -204,31 +204,35 @@ class PEPDO(TensorNetwork):
         node_edge_list = [self.nodes[trun_node_idx][i] for i in range(5)] + [Unode[1]]
         self.nodes[trun_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
 
+    def __contract_node_inner(self, idx):
+        shape = self.nodes[idx].tensor.shape
+        tmp = oe.contract("abcdef,aBCDEf->bBcCdDeE",self.nodes[idx].tensor, self.nodes[idx].tensor.conj())
+        tmp = tmp.reshape(shape[1]**2, shape[2]**2, shape[3]**2, shape[4]**2)
+        # contract dangling
+        # top
+        if idx < self.width:
+            if shape[1] != 1:
+                tmp = oe.contract("abcd,a->bcd",tmp,np.array([1,0,0,1])).reshape(1,shape[2]**2,shape[3]**2,shape[4]**2)
+        # right
+        if idx % self.width == self.width-1:
+            if shape[2] != 1:
+                tmp = oe.contract("abcd,b->acd",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,1,shape[3]**2,shape[4]**2)
+        # down
+        if idx >= self.n-self.width:
+            if shape[3] != 1:
+                tmp = oe.contract("abcd,c->abd",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,1,shape[4]**2)
+        # left
+        if idx % self.width == 0:
+            if shape[4] != 1:
+                tmp = oe.contract("abcd,d->abc",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,shape[3]**2,1)
+        return tmp
+
     def __create_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
         # contract inner, physical and dangling dim
         total_fid = 1.0
         peps_tensors = []
         for idx in range(self.n):
-            shape = self.nodes[idx].tensor.shape
-            tmp = oe.contract("abcdef,aBCDEf->bBcCdDeE",self.nodes[idx].tensor, self.nodes[idx].tensor.conj())
-            tmp = tmp.reshape(shape[1]**2, shape[2]**2, shape[3]**2, shape[4]**2)
-            # contract dangling
-            # top
-            if idx < self.width:
-                if shape[1] != 1:
-                    tmp = oe.contract("abcd,a->bcd",tmp,np.array([1,0,0,1])).reshape(1,shape[2]**2,shape[3]**2,shape[4]**2)
-            # right
-            if idx % self.width == self.width-1:
-                if shape[2] != 1:
-                    tmp = oe.contract("abcd,b->acd",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,1,shape[3]**2,shape[4]**2)
-            # down
-            if idx >= self.n-self.width:
-                if shape[3] != 1:
-                    tmp = oe.contract("abcd,c->abd",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,1,shape[4]**2)
-            # left
-            if idx % self.width == 0:
-                if shape[4] != 1:
-                    tmp = oe.contract("abcd,d->abc",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,shape[3]**2,1)
+            tmp = self.__contract_node_inner(idx)
             peps_tensors.append(tmp)
         
         # BMPS from top left
@@ -277,7 +281,7 @@ class PEPDO(TensorNetwork):
 
         return top_nodes_list, down_nodes_list, total_fid
     
-    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, is_calc_BMPS=True):
+    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gpu=True, is_calc_BMPS=True):
         if is_calc_BMPS:
             self.__create_BMPS(bmps_truncate_dim, bmps_threthold)
         top_nodes_list, down_nodes_list, total_fid = self.top_nodes_list, self.down_nodes_list, self.bmps_fidelity
@@ -321,7 +325,7 @@ class PEPDO(TensorNetwork):
                             print("no truncation done")
                             U = None
                             break
-                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=True, visualize=True)
+                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
                         truncate_dim = cur_truncate_dim
                         if Fid > threthold:
                             break
@@ -377,7 +381,7 @@ class PEPDO(TensorNetwork):
                             print("no truncation done")
                             U = None
                             break
-                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=True, visualize=True)
+                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
                         truncate_dim = cur_truncate_dim
                         if Fid > threthold:
                             break
@@ -444,10 +448,27 @@ class PEPDO(TensorNetwork):
     def inner_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, is_calc_BMPS=True):
         if is_calc_BMPS:
             self.__create_BMPS(bmps_truncate_dim, bmps_threthold)
-        top_nodes_list, down_nodes_list, total_fid = self.top_nodes_list, self.down_nodes_list, self.bmps_fidelity
-
+        _, down_nodes_list, total_fid = self.top_nodes_list, self.down_nodes_list, self.bmps_fidelity
+        
+        mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
+        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_top.canonicalization() 
+        top_nodes_list = []
+        for h in range(self.height):
+            for w in range(self.width):
+                tensor = peps_tensors[h*self.width+w]
+                shape = tensor.shape
+                mpo_tensors.append(tensor.transpose(2,0,3,1))
+            mpo = MPO(mpo_tensors)
+            fid, tmp = mps_top.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False, is_return_history=True)
+            top_nodes_list += tmp
+            #print("bmps mps-dim", mps.virtual_dims)
+            total_fid = total_fid * fid
+            print(f"fidelity: {fid}")
+            print(f"total fidelity: {total_fid}")
         # inner FET from top left
         for h in range(self.height):
+            mpo_tensors = []
             for w in range(self.width):
                 print(f"inner h:{h} w:{w}")
                 if h != 0 and h != self.height-1 and w != 0 and w != self.width-1:
