@@ -255,6 +255,47 @@ class MERA(TensorNetwork):
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+    
+    def prepare_foliation_tmp(self, tensors, cut_list):
+        node_list, output_edge_order = self.prepare_inner()
+        for i in range(len(tensors)):
+            node_list[i+len(tensors)].tensor = tensors[i]
+
+        rho_edge_order1 = []
+        rho_edge_order2 = []
+        for node_idx1, edge_idx1, node_idx2, edge_idx2 in cut_list:
+            if node_list[node_idx1][edge_idx1] != node_list[node_idx2][edge_idx2]:
+                print("error! cut_list is not correct")
+            node_list[node_idx1][edge_idx1].disconnect()
+            rho_edge_order1.append(node_list[node_idx1][edge_idx1])
+            rho_edge_order2.append(node_list[node_idx2][edge_idx2])
+        
+        output_edge_order = rho_edge_order1 + rho_edge_order2
+
+        return node_list, output_edge_order
+
+    def find_calc_foliation_tmp(self, tensors, cut_list, algorithm=None, seq="ADCRS", visualize=False):
+        """find calc_foliation contraction path by using quimb
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+
+        node_list, output_edge_order = self.prepare_foliation_tmp(tensors, cut_list)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+        
 
 
     def calc_foliation(self, cut_list=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
