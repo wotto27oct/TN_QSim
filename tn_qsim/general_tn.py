@@ -374,6 +374,7 @@ class TensorNetwork():
                     value[i] = contract_jit[i%pnum](tree_s.slice_arrays(arrays[i%pnum], i))
             else:
                 for i in range(pnum):
+                    print(f"compling {i}th jit")
                     value[i] = contract_jit[i%pnum](tree_s.slice_arrays(arrays[i%pnum], i))
                 for i in range(pnum, tree.nslices):
                     value[i%pnum] += contract_jit[i%pnum](tree_s.slice_arrays(arrays[i%pnum], i))
