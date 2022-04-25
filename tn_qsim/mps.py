@@ -391,10 +391,11 @@ class MPS(TensorNetwork):
                     U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threthold_err)
                     
                     # calc fidelity for normalization
-                    s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
-                    trun_s_sq = np.dot(trun_s, trun_s)
-                    fidelity = s_sq / (s_sq + trun_s_sq)
-                    total_fidelity *= fidelity
+                    if len(s.tensor) != 0:
+                        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+                        trun_s_sq = np.dot(trun_s, trun_s)
+                        fidelity = s_sq / (s_sq + trun_s_sq)
+                        total_fidelity *= fidelity
 
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
