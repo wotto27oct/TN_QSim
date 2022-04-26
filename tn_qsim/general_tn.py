@@ -761,101 +761,6 @@ class TensorNetwork():
             print(f"bond: {bond_dim}, trun: {trun_dim}")
         print("gpu", gpu)
 
-        """if not gpu:
-            I = np.eye(bond_dim)
-            U, s, Vh = np.linalg.svd(I)
-            U = U[:,:trun_dim]
-            S = np.diag(s[:trun_dim])
-            Vh = Vh[:trun_dim, :]
-
-            Fid = oe.contract("iIiI", Gamma)
-            if visualize:
-                print(f"Fid before truncation: {Fid}")
-
-            R = oe.contract("pq,qj->pj",S,Vh).flatten()
-            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
-            A = oe.contract("a,b->ab",P,P.conj())
-            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-            trace = np.dot(R.conj(), np.dot(B, R))
-            Fid = np.dot(R.conj(), np.dot(A, R)) / trace
-            if visualize:
-                print(f"Fid before optimization: {Fid}")
-
-            past_fid = Fid
-            
-            Rmax = None
-            past_fid = 0.0
-            past_trace = trace
-            first_fid = Fid
-            firstU = jax.numpy.dot(U, S) / np.sqrt(trace)
-            firstVh = Vh
-            try_idx = 0
-
-            if trials == None:
-                trials = 20
-
-            while (try_idx < trials):
-                ## step1
-                R = oe.contract("pq,qj->pj",S,Vh).flatten()
-                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
-                A = oe.contract("a,b->ab",P,P.conj())
-                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-
-                #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-
-                Rmax = np.dot(np.linalg.pinv(B), P)
-                trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
-                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
-                if visualize:
-                    print(f"fid at trial {try_idx} step1: {Fid}")
-                if past_fid > Fid or Fid > 1.0 + 1e-6:
-                    print("numerically unstable")
-                    break
-                elif np.abs(Fid - past_fid) < 1e-5:
-                    print("no more improvement")
-                    break
-                past_fid = Fid
-                past_trace = trace
-
-                Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
-                S = np.dot(Utmp, np.diag(stmp))
-
-                Binv = np.linalg.inv(B)
-                Aprime = np.dot(Binv, A)
-                eig, w = np.linalg.eig(Aprime)
-                print(eig)
-
-                ## step2
-                R = oe.contract("ip,pq->qi",U,S).flatten()
-                P = oe.contract("iIjJ,ij,QJ->QI",Gamma,I,Vh.conj()).flatten()
-                A = oe.contract("a,b->ab",P,P.conj())
-                B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
-
-                Rmax = np.dot(np.linalg.pinv(B), P)
-                trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
-                Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
-                if visualize:
-                    print(f"fid at trial {try_idx} step2: {Fid}")
-                if past_fid > Fid or Fid > 1.0 + 1e-6:
-                    print("numerically unstable")
-                    break
-                elif np.abs(Fid - past_fid) < 1e-5:
-                    print("no more improvement")
-                    break
-                past_fid = Fid
-                past_trace = trace
-
-                U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
-                S = np.dot(np.diag(stmp), Vhtmp)
-
-                try_idx += 1
-            
-            if first_fid < past_fid:
-                U = np.dot(U, S) / np.sqrt(past_trace)
-
-                return U, Vh, past_fid
-            else:
-                return firstU, firstVh, first_fid"""
         if not gpu:
             print("using cpu")
             I = np.eye(bond_dim)
@@ -873,9 +778,21 @@ class TensorNetwork():
             A = oe.contract("a,b->ab",P,P.conj())
             B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
             trace = np.dot(R.conj(), np.dot(B, R))
+            #if np.abs(trace) < 1e-10:
+            #    print("initial trace too small")
+            #    return None, None, 0.0
+
             Fid = np.dot(R.conj(), np.dot(A, R)) / trace
+            if np.isnan(Fid) or np.isinf(Fid):
+                print("initial trace too small")
+                return None, None, 0.0
+
             if visualize:
                 print(f"Fid before optimization: {Fid}")
+            
+            if Fid > 1 + 1e-6:
+                print("numerically unstable")
+                return None, None, 0.0
             
             Rmax = None
 
@@ -904,7 +821,7 @@ class TensorNetwork():
                 if past_fid > Fid or Fid > 1.0 + 1e-6:
                     print("numerically unstable")
                     break
-                elif np.abs(Fid - past_fid) < 1e-5:
+                elif np.abs(Fid - past_fid) < 1e-8:
                     print("no more improvement")
                     break
                 past_fid = Fid
@@ -932,7 +849,7 @@ class TensorNetwork():
                 if past_fid > Fid or Fid > 1.0 + 1e-6:
                     print("numerically unstable")
                     break
-                elif np.abs(Fid - past_fid) < 1e-5:
+                elif np.abs(Fid - past_fid) < 1e-8:
                     print("no more improvement")
                     break
                 past_fid = Fid
@@ -947,7 +864,18 @@ class TensorNetwork():
                 #print(past_fid, first_fid)
                 #print(past_trace)
                 #print(np.sqrt(past_trace))
+                R = oe.contract("pq,qj->pj",S,Vh).flatten()
+                P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
+                A = oe.contract("a,b->ab",P,P.conj())
+                B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
+                trace = np.dot(R.conj(), np.dot(B, R))
+                print("trace", trace)
+
                 U = np.dot(U, S) / np.sqrt(past_trace)
+
+                trace = oe.contract("ijIJ,ip,pj,IP,PJ",Gamma,U,Vh,U.conj(),Vh.conj())
+                print("new trace:", trace)
+
 
                 return U, Vh, past_fid
             else:
