@@ -209,7 +209,46 @@ class MPS(TensorNetwork):
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    def prepare_gamma(self, bond_idx):
+        node_list, output_edge_order = self.prepare_inner()
+
+        if bond_idx == 0:
+            edge_idx = 1
+        else:
+            edge_idx = 2
+
+        # split by bond_idx
+        node_list[bond_idx][edge_idx].disconnect("i", "j")
+        node_list[bond_idx+self.n][edge_idx].disconnect("I", "J")
+        edge_i = node_list[bond_idx][edge_idx]
+        edge_I = node_list[bond_idx+self.n][edge_idx]
+        edge_j = node_list[bond_idx+1][1]
+        edge_J = node_list[bond_idx+1+self.n][1]
+        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
+
+        return node_list, output_edge_order
+
+    def calc_gamma(self, bond_idx, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
+        """calc gamma of MPS state for gauge fixing
+
+        Args:
+            bond_idx (int) : the index of bond, leftmost is 0, rightmost is n-1
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_gamma(bond_idx)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
         
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
     def apply_gate(self, tidx, gtensor):
         """ apply nqubit gate

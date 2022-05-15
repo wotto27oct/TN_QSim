@@ -227,7 +227,7 @@ class PEPDO(TensorNetwork):
                 tmp = oe.contract("abcd,d->abc",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,shape[3]**2,1)
         return tmp
 
-    def __create_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+    """def __create_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
         # contract inner, physical and dangling dim
         total_fid = 1.0
         peps_tensors = []
@@ -399,10 +399,246 @@ class PEPDO(TensorNetwork):
                     print(f"fidelity: {Fid}")
                     print(f"total fidelity: {total_fid}")
 
+        return total_fid"""
+    
+    def __create_down_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+        # contract inner, physical and dangling dim
+        total_fid = 1.0
+        peps_tensors = []
+        for idx in range(self.n):
+            tmp = self.__contract_node_inner(idx)
+            peps_tensors.append(tmp)
+        
+        # BMPS from down right
+        mps_down_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
+        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_down.canonicalization()
+        mps_down_list = []
+        for h in range(self.height-1,-1,-1):
+            mpo_tensors = []
+            for w in range(self.width-1,-1,-1):
+                tensor = peps_tensors[h*self.width+w]
+                shape = tensor.shape
+                mpo_tensors.append(tensor.transpose(0,2,1,3))
+            mpo = MPO(mpo_tensors)
+            fid = mps_down.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            mps_down_list.append(copy.deepcopy(mps_down))
+            #print("bmps mps-dim", mps.virtual_dims)
+            total_fid = total_fid * fid
+            print(f"fidelity: {fid}")
+            print(f"total fidelity: {total_fid}")
+
+        mps_down_list = mps_down_list[::-1]
+        self.mps_down_list = mps_down_list
+        self.bmps_fidelity = total_fid
+
+        return mps_down_list, total_fid
+
+    def __create_right_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+        # contract inner, physical and dangling dim
+        total_fid = 1.0
+        peps_tensors = []
+        for idx in range(self.n):
+            tmp = self.__contract_node_inner(idx)
+            peps_tensors.append(tmp)
+        
+        # BMPS from down right
+        mps_right_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
+        mps_right = MPS(mps_right_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_right.canonicalization()
+        mps_right_list = []
+        for w in range(self.width-1,-1,-1):
+            mpo_tensors = []
+            for h in range(self.height-1,-1,-1):
+                tensor = peps_tensors[h*self.width+w]
+                shape = tensor.shape
+                mpo_tensors.append(tensor.transpose(3,1,2,0))
+            mpo = MPO(mpo_tensors)
+            fid = mps_right.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
+            mps_right_list.append(copy.deepcopy(mps_right))
+            #print("bmps mps-dim", mps.virtual_dims)
+            total_fid = total_fid * fid
+            print(f"fidelity: {fid}")
+            print(f"total fidelity: {total_fid}")
+
+        mps_right_list = mps_right_list[::-1]
+        self.mps_right_list = mps_right_list
+        self.bmps_fidelity = total_fid
+
+        return mps_right_list, total_fid
+    
+    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gpu=True, is_calc_BMPS=True):
+        total_fid = 1.0
+        mps_down_list, mps_right_list = None, None
+        if is_calc_BMPS:
+            mps_down_list, total_fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threthold)
+            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threthold)
+            total_fid *= fid
+        else:
+            mps_down_list, mps_right_list = self.mps_down_list, mps_right_list
+
+        # vertical FET from top left
+        # BMPS from top left
+        mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
+        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_top.canonicalization()
+
+        for h in range(self.height-1):
+            # create top MPS
+            mpo_tensors = []
+            for w in range(self.width):
+                tmp = self.__contract_node_inner(h*self.width+w)
+                mpo_tensors.append(tmp.transpose(2,0,3,1))
+            mpo = MPO(mpo_tensors)
+            fid = mps_top.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            total_fid = total_fid * fid
+            for w in range(self.width):
+                print(f"vertical h:{h} w:{w}")
+                trace, _ = self.calc_trace_by_BMPS(threthold=bmps_threthold, visualize=False)
+                print(f"trace:", {np.trace(trace.reshape(2,2))})
+                top_nodes = tn.replicate_nodes(mps_top.nodes)
+                down_nodes = tn.replicate_nodes(mps_down_list[h+1].nodes)
+                node_contract_list = []
+                for i in range(self.width):
+                    node_contract_list.append(top_nodes[i])
+                    node_contract_list.append(down_nodes[self.width-1-i])
+                    if i == w:
+                        continue
+                    tn.connect(top_nodes[i][0], down_nodes[self.width-1-i][0])
+                one = tn.Node(np.array([1]))
+                tn.connect(top_nodes[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(down_nodes[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(top_nodes[self.width-1][2], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(down_nodes[self.width-1][2], one[0])
+                node_contract_list.append(one)
+                output_edge_order = [top_nodes[w][0], down_nodes[self.width-1-w][0]]
+                Gamma = tn.contractors.auto(node_contract_list, output_edge_order=output_edge_order).tensor
+                shape = Gamma.shape
+                dim1 = int(np.sqrt(shape[0]))
+                dim2 = int(np.sqrt(shape[1]))
+                Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
+                U, Vh, Fid = None, None, 1.0
+                truncate_dim = None
+                if threthold is not None:
+                    for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+                        if cur_truncate_dim == Gamma.shape[0]:
+                            print("no truncation done")
+                            U = None
+                            break
+                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
+                        truncate_dim = cur_truncate_dim
+                        if Fid > threthold:
+                            break
+                            
+                # if truncation is executed        
+                if U is not None:
+                    trun_node_idx = h*self.width+w
+                    trun_edge_idx = 3
+                    op_node_idx = (h+1)*self.width+w
+                    op_edge_idx = 1
+                    self.__apply_bond_matrix(trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh)
+
+                    print(f"truncate dim: {truncate_dim}")
+                    total_fid = total_fid * Fid
+                    print(f"fidelity: {Fid}")
+                    print(f"total fidelity: {total_fid}")
+
+                    # also for mps_top_nodes, mps_down_list
+                    Utensor = oe.contract("ij,IJ->jJiI",U,U.conj()).reshape(U.shape[1]**2,-1,1,1)
+                    mps_top.apply_MPO([w], MPO([Utensor]))
+
+                    Vhtensor = oe.contract("ij,IJ->iIjJ",Vh,Vh.conj()).reshape(Vh.shape[0]**2,-1,1,1)
+                    mps_down_list[h+1].apply_MPO([self.width-1-w], MPO([Vhtensor]))
+
+        # horizontal FET from top left
+        # BMPS from top left
+        mps_left_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
+        mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_left.canonicalization()
+
+        for w in range(self.width-1):
+            # create top MPS
+            mpo_tensors = []
+            for h in range(self.height):
+                tmp = self.__contract_node_inner(h*self.width+w)
+                mpo_tensors.append(tmp.transpose(1,3,0,2))
+            mpo = MPO(mpo_tensors)
+            fid = mps_left.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
+            total_fid = total_fid * fid
+            for h in range(self.height):
+                print(f"horizontal h:{h} w:{w}")
+                trace, _ = self.calc_trace_by_BMPS(threthold=bmps_threthold, visualize=False)
+                print(f"trace:", {np.trace(trace.reshape(2,2))})
+                left_node = tn.replicate_nodes(mps_left.nodes)
+                right_nodes = tn.replicate_nodes(mps_right_list[w+1].nodes)
+                node_contract_list = []
+                for i in range(self.height):
+                    node_contract_list.append(left_node[i])
+                    node_contract_list.append(right_nodes[self.height-1-i])
+                    if i == h:
+                        continue
+                    tn.connect(left_node[i][0], right_nodes[self.height-1-i][0])
+                one = tn.Node(np.array([1]))
+                tn.connect(left_node[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(right_nodes[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(left_node[self.height-1][2], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(right_nodes[self.height-1][2], one[0])
+                node_contract_list.append(one)
+                output_edge_order = [left_node[h][0], right_nodes[self.height-1-h][0]]
+                Gamma = tn.contractors.auto(node_contract_list, output_edge_order=output_edge_order).tensor
+                shape = Gamma.shape
+                dim1 = int(np.sqrt(shape[0]))
+                dim2 = int(np.sqrt(shape[1]))
+                Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
+                U, Vh, Fid = None, None, 1.0
+                truncate_dim = None
+                if threthold is not None:
+                    for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+                        if cur_truncate_dim == Gamma.shape[0]:
+                            print("no truncation done")
+                            U = None
+                            break
+                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
+                        truncate_dim = cur_truncate_dim
+                        if Fid > threthold:
+                            break
+                            
+                # if truncation is executed        
+                if U is not None:
+                    trun_node_idx = h*self.width+w
+                    trun_edge_idx = 2
+                    op_node_idx = h*self.width+w+1
+                    op_edge_idx = 4
+                    self.__apply_bond_matrix(trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh)
+
+                    print(f"truncate dim: {truncate_dim}")
+                    total_fid = total_fid * Fid
+                    print(f"fidelity: {Fid}")
+                    print(f"total fidelity: {total_fid}")
+
+                    # also for mps_left_nodes, mps_right_list
+                    Utensor = oe.contract("ij,IJ->jJiI",U,U.conj()).reshape(U.shape[1]**2,-1,1,1)
+                    mps_left.apply_MPO([h], MPO([Utensor]))
+
+                    Vhtensor = oe.contract("ij,IJ->iIjJ",Vh,Vh.conj()).reshape(Vh.shape[0]**2,-1,1,1)
+                    mps_right_list[w+1].apply_MPO([self.height-1-h], MPO([Vhtensor]))
+
         return total_fid
 
 
-    def calc_trace_by_BMPS(self, truncate_dim=None, threthold=None):
+    def calc_trace_by_BMPS(self, truncate_dim=None, threthold=None, visualize=True):
         # contract inner and physical dim
         peps_tensors = []
         for idx in range(self.n):
@@ -439,9 +675,10 @@ class PEPDO(TensorNetwork):
             fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
             #print("bmps mps-dim", mps.virtual_dims)
             total_fid = total_fid * fid
-            print(f"fidelity: {fid}")
-            print(f"total fidelity: {total_fid}")
-            print(f"MPS virtual dims: {mps.virtual_dims}")
+            if visualize:
+                print(f"fidelity: {fid}")
+                print(f"total fidelity: {total_fid}")
+                print(f"MPS virtual dims: {mps.virtual_dims}")
 
         return mps.contract().flatten(), total_fid
 

@@ -353,7 +353,22 @@ class TensorNetwork():
             print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} nslice: {tree_s.nslices}")
 
         if gpu and tree_s.total_flops() > 1e8:
-            gpus = jax.devices('gpu')
+            arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
+            # use jax to use jit and GPU
+            pool = ThreadPoolExecutor(1)
+
+            contract_core_jit = jax.jit(functools.partial(tree_s.contract_core, backend="jax"))
+
+            fs = [
+                pool.submit(contract_core_jit, tree_s.slice_arrays(arrays, i))
+                for i in range(tree_s.nslices)
+            ]
+
+            slices = (np.array(f.result()) for f in fs)
+
+            x = tree_s.gather_slices(slices, progbar=True)
+            return x
+            """gpus = jax.devices('gpu')
             print(gpus)
             pnum = len(gpus)
 
@@ -386,7 +401,7 @@ class TensorNetwork():
                     if value is not None:
                         x += np.array(val)
                 
-            return x
+            return x"""
             #rep_num = tree_s.nslices // pal_num
             #arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
             """arrays1 = [jax.device_put(tensor.data, gpus[0]) for tensor in tn.tensors]

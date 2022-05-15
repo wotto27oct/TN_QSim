@@ -413,7 +413,7 @@ class PEPS(TensorNetwork):
         self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
         return
 
-    def calc_inner_by_BMPS(self, truncate_dim=None, threthold=None):
+    def calc_inner_by_BMPS(self, truncate_dim=None, threthold=None, visualize=False):
         # contract inner and physical dim
         peps_tensors = []
         for idx in range(self.n):
@@ -450,9 +450,10 @@ class PEPS(TensorNetwork):
             fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
             #print("bmps mps-dim", mps.virtual_dims)
             total_fid = total_fid * fid
-            print(f"fidelity: {fid}")
-            print(f"total fidelity: {total_fid}")
-            print(f"MPS virtual dims: {mps.virtual_dims}")
+            if visualize:
+                print(f"fidelity: {fid}")
+                print(f"total fidelity: {total_fid}")
+                print(f"MPS virtual dims: {mps.virtual_dims}")
 
         return mps.contract().flatten(), total_fid
     
@@ -510,7 +511,84 @@ class PEPS(TensorNetwork):
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    def prepare_Gamma(self, trun_node_idx):
+        trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
+        trun_edge_idx = 0
+        op_edge_idx = 0
+        if trun_node_idx - op_node_idx == self.width:
+            trun_edge_idx = 1
+            op_edge_idx = 3
+        elif trun_node_idx - op_node_idx == -1:
+            trun_edge_idx = 2
+            op_edge_idx = 4
+        elif trun_node_idx - op_node_idx == -self.width:
+            trun_edge_idx = 3
+            op_edge_idx = 1
+        else:
+            trun_edge_idx = 4
+            op_edge_idx = 2
+        
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+        
+        cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
+        cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        edge_i = cp_nodes[trun_node_idx][trun_edge_idx]
+        edge_I = cp_nodes[trun_node_idx+self.n][trun_edge_idx]
+        edge_j = cp_nodes[op_node_idx][op_edge_idx]
+        edge_J = cp_nodes[op_node_idx+self.n][op_edge_idx]
+        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        cp_nodes, output_edge_order1 = self.__clear_dangling(cp_nodes)
+        # crear all other output_edge
+        for i in range(len(output_edge_order1)//2):
+            tn.connect(output_edge_order1[i], output_edge_order1[i+len(output_edge_order1)//2])
+        node_list = [node for node in cp_nodes]
+
+        return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order
+
+    def find_Gamma_tree(self, trun_node_idx, algorithm=None, seq="ADCRS", visualize=False):
+        """find contraction tree of Gamma
+
+        Args:
+            trun_node_idx (list ofint) : the node index connected to the target edge
+            truncate_dim (int) : the target bond dimension
+            trial (int) : the number of iterations
+            visualize (bool) : if printing the optimization process or not
+        """
+        for i in range(self.n):
+            self.nodes[i].name = f"node{i}"
+        
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
+
+        if self.nodes[trun_node_idx][trun_edge_idx].dimension == 1:
+            return None, None
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
+        return tn, tree
     
+    def calc_Gamma(self, trun_node_idx, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=""):
+        """calc Gamma
+
+        Args:
+            trun_node_idx (int, int) : (trun_node_idx, op_node_idx)
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
     
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []
@@ -1016,7 +1094,7 @@ class PEPS(TensorNetwork):
 
         return total_fid
     
-    def prepare_Gamma(self, trun_node_idx):
+    def prepare_Gamma_old(self, trun_node_idx):
         trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
         trun_edge_idx = 0
         op_edge_idx = 0
@@ -1056,7 +1134,7 @@ class PEPS(TensorNetwork):
         return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order
 
 
-    def find_Gamma_tree(self, trun_node_idx, algorithm=None, memory_limit=None, visualize=False):
+    #def find_Gamma_tree(self, trun_node_idx, algorithm=None, memory_limit=None, visualize=False):
         """find contraction tree of Gamma
 
         Args:
@@ -1065,13 +1143,13 @@ class PEPS(TensorNetwork):
             trial (int) : the number of iterations
             visualize (bool) : if printing the optimization process or not
         """
-        for i in range(self.n):
+        """for i in range(self.n):
             self.nodes[i].name = f"node{i}"
 
         trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
 
         tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        return tree, cost, sp_cost
+        return tree, cost, sp_cost"""
 
 
     def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False, calc_lim=None):
