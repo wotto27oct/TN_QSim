@@ -3,7 +3,7 @@ import tensornetwork as tn
 from tn_qsim.mpo import MPO
 from tn_qsim.mps import MPS
 from tn_qsim.general_tn import TensorNetwork
-from tn_qsim.utils import from_tn_to_quimb
+from tn_qsim.utils import *
 import opt_einsum as oe
 import copy
 
@@ -926,15 +926,14 @@ class PEPS(TensorNetwork):
 
         return mps_right_list, total_fid
     
-    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gpu=True, is_calc_BMPS=True):
+    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=20, gpu=True, is_calc_BMPS=True, is_fix_gauge=False, visualize=False):
         total_fid = 1.0
         mps_down_list, mps_right_list = None, None
         if is_calc_BMPS:
-            mps_down_list, total_fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threthold)
-            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threthold)
+            mps_down_list, fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threthold)
             total_fid *= fid
         else:
-            mps_down_list, mps_right_list = self.mps_down_list, mps_right_list
+            mps_down_list = self.mps_down_list
 
         # vertical FET from top left
         # BMPS from top left
@@ -942,6 +941,7 @@ class PEPS(TensorNetwork):
         mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
         mps_top.canonicalization()
 
+        #for h in range(0):
         for h in range(self.height-1):
             # create top MPS
             mpo_tensors = []
@@ -952,8 +952,10 @@ class PEPS(TensorNetwork):
             fid = mps_top.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
             total_fid = total_fid * fid
             for w in range(self.width):
-                print(f"vertical h:{h} w:{w}")
-                print(self.calc_inner_by_BMPS(threthold=bmps_threthold))
+                # create Gamma to execute FET for each verical edges
+                if visualize:
+                    print(f"vertical h:{h} w:{w}")
+                    print("BMPS trace:", self.calc_inner_by_BMPS(threthold=bmps_threthold))
                 top_nodes = tn.replicate_nodes(mps_top.nodes)
                 down_nodes = tn.replicate_nodes(mps_down_list[h+1].nodes)
                 node_contract_list = []
@@ -981,7 +983,41 @@ class PEPS(TensorNetwork):
                 dim1 = int(np.sqrt(shape[0]))
                 dim2 = int(np.sqrt(shape[1]))
                 Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
-                U, Vh, Fid = None, None, 1.0
+                sigma = np.eye(dim1)
+                ori_Gamma = Gamma
+
+                # fix gauge
+                if is_fix_gauge:
+                    Gamma, sigma, xinv, yinv = fix_gauge(Gamma, visualize=False)
+
+                    gnorm, snorm, xnorm, ynorm = np.linalg.norm(Gamma), np.linalg.norm(sigma), np.linalg.norm(xinv), np.linalg.norm(yinv)
+                    if gnorm > 1e5 or snorm > 1e5 or xnorm > 1e5 or ynorm > 1e5:
+                        print(f"unstable fixing, {gnorm} {snorm} {xnorm} {ynorm}")
+                        Gamma = ori_Gamma
+                        sigma = np.eye(sigma.shape[0])
+                        xinv = np.eye(xinv.shape[0])
+                        yinv = np.eye(yinv.shape[0])
+
+                    if visualize:
+                        print("Gamma after gauge fixing", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+                """Gamma, sigma = fix_gauge(Gamma, visualize=visualize)
+
+                if visualize:
+                    print("Gamma after gauge fixing", Gamma.reshape(Gamma.shape[0]**2, -1))
+                    print("is_WTG:", is_WTG(Gamma, sigma))
+                    print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                    sig = np.diag(sigma)
+                    sig = sig / np.linalg.norm(sig)
+                    print("WTG coef:", sig)"""
+                
+                # sigma = np.eye(dim1)
+
+                U, S, Vh, Fid = None, None, None, 1.0
                 truncate_dim = None
                 if threthold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
@@ -989,17 +1025,41 @@ class PEPS(TensorNetwork):
                             print("no truncation done")
                             U = None
                             break
-                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
-                        truncate_dim = cur_truncate_dim
+                        for sd in range(10):
+                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
+                            truncate_dim = cur_truncate_dim
+                            if Fid > threthold:
+                                break
                         if Fid > threthold:
                             break
                             
                 # if truncation is executed        
                 if U is not None:
+                    Unorm, Snorm, Vhnorm = np.linalg.norm(U), np.linalg.norm(S), np.linalg.norm(Vh)
+                    if Unorm > 1e3 or Snorm > 1e3 or Vhnorm > 1e3:
+                        print(f"optimal truncation unstable, {Unorm}, {Snorm}, {Vhnorm}")
+                        U = None
+
+                if U is not None:
+                    if visualize:
+                        Gamma = oe.contract("iIjJ,ip,qj,IP,QJ->pPqQ",Gamma,U,Vh,U.conj(),Vh.conj())
+                        sigma = S
+                        print("Gamma after optimal truncation", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+                    U = np.dot(U, S) / np.sqrt(trace)
                     trun_node_idx = h*self.width+w
                     trun_edge_idx = 3
                     op_node_idx = (h+1)*self.width+w
                     op_edge_idx = 1
+
+                    if is_fix_gauge:
+                        U = np.dot(xinv, U)
+                        Vh = np.dot(Vh, yinv)
+
                     self.__apply_bond_matrix(trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh)
 
                     print(f"truncate dim: {truncate_dim}")
@@ -1015,12 +1075,20 @@ class PEPS(TensorNetwork):
                     mps_down_list[h+1].apply_MPO([self.width-1-w], MPO([Vhtensor]))
 
         # horizontal FET from top left
+
+        if is_calc_BMPS:
+            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threthold)
+            total_fid *= fid
+        else:
+            mps_right_list = self.mps_right_list
+
         # BMPS from top left
         mps_left_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
         mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
         mps_left.canonicalization()
 
         for w in range(self.width-1):
+        #for w in range(0):
             # create top MPS
             mpo_tensors = []
             for h in range(self.height):
@@ -1030,8 +1098,12 @@ class PEPS(TensorNetwork):
             fid = mps_left.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
             total_fid = total_fid * fid
             for h in range(self.height):
-                print(f"horizontal h:{h} w:{w}")
-                print(self.calc_inner_by_BMPS(threthold=bmps_threthold))
+                if visualize:
+                    print(f"horizontal h:{h} w:{w}")
+                    inner_val , fid = self.calc_inner_by_BMPS(threthold=bmps_threthold)
+                    print(f"BMPS trace: {inner_val} fid:{fid}")
+                    if np.real_if_close(inner_val.item()) < 0.9999:
+                        print("inner calc error happened!!", inner_val)
                 left_node = tn.replicate_nodes(mps_left.nodes)
                 right_nodes = tn.replicate_nodes(mps_right_list[w+1].nodes)
                 node_contract_list = []
@@ -1059,7 +1131,30 @@ class PEPS(TensorNetwork):
                 dim1 = int(np.sqrt(shape[0]))
                 dim2 = int(np.sqrt(shape[1]))
                 Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
-                U, Vh, Fid = None, None, 1.0
+                sigma = np.eye(dim1)
+                ori_Gamma = Gamma
+
+                # fix gauge
+                if is_fix_gauge:
+                    Gamma, sigma, xinv, yinv = fix_gauge(Gamma, visualize=False)
+
+                    gnorm, snorm, xnorm, ynorm = np.linalg.norm(Gamma), np.linalg.norm(sigma), np.linalg.norm(xinv), np.linalg.norm(yinv)
+                    if gnorm > 1e5 or snorm > 1e5 or xnorm > 1e5 or ynorm > 1e5:
+                        print(f"unstable fixing, {gnorm} {snorm} {xnorm} {ynorm}")
+                        Gamma = ori_Gamma
+                        sigma = np.eye(sigma.shape[0])
+                        xinv = np.eye(xinv.shape[0])
+                        yinv = np.eye(yinv.shape[0])
+
+                    if visualize:
+                        print("Gamma after gauge fixing", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+
+                U, S, Vh, Fid = None, None, None, 1.0
                 truncate_dim = None
                 if threthold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
@@ -1067,17 +1162,36 @@ class PEPS(TensorNetwork):
                             print("no truncation done")
                             U = None
                             break
-                        U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
-                        truncate_dim = cur_truncate_dim
+                        for sd in range(10):
+                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
+                            truncate_dim = cur_truncate_dim
+                            if Fid > threthold:
+                                break
                         if Fid > threthold:
                             break
                             
                 # if truncation is executed        
                 if U is not None:
+                    if visualize:
+                        Gamma = oe.contract("iIjJ,ip,qj,IP,QJ->pPqQ",Gamma,U,Vh,U.conj(),Vh.conj())
+                        sigma = S
+                        print("Gamma after optimal truncation", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("Fid from Gamma, S:", oe.contract("iIjJ,ij,IJ",Gamma,sigma,sigma))
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+                    U = np.dot(U, S) / np.sqrt(trace)
                     trun_node_idx = h*self.width+w
                     trun_edge_idx = 2
                     op_node_idx = h*self.width+w+1
                     op_edge_idx = 4
+
+                    if is_fix_gauge:
+                        U = np.dot(xinv, U)
+                        Vh = np.dot(Vh, yinv)
+
                     self.__apply_bond_matrix(trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh)
 
                     print(f"truncate dim: {truncate_dim}")

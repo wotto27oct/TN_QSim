@@ -56,10 +56,12 @@ def from_tn_to_quimb(node_list, output_edge_order):
     return tn, output_alpha
 
 def is_WTG(Gamma, sigma):
+    simga = np.real_if_close(sigma)
     bond_dim = Gamma.shape[0]
     for s in np.diag(sigma):
         if s < 0:
             print("Error! sigma is not positive")
+            print(np.diag(sigma))
             return False
     rho_L = oe.contract("kj,kJ,iIjJ->iI",sigma,sigma,Gamma)
     rho_L = rho_L / np.trace(rho_L)
@@ -86,6 +88,8 @@ def fix_gauge(Gamma, visualize=False):
     Returns:
         Gamma (np.array) : new env-tensor Gamma_iIjJ
         sigma (np.array) : new bond matrix sigma_ij
+        xinv (np.array) : new tensor to be contracted to the original tensor
+        yinv (np.array)
     """
     # assume initial bond matrix is identity
     bond_dim = Gamma.shape[0]
@@ -94,9 +98,9 @@ def fix_gauge(Gamma, visualize=False):
     # step 1
     leig, leigv = np.linalg.eig(Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1))
     if visualize:
-        print("gamma for l:", Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1))
+        print("gamma for l:", Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
         print("leig:", leig)
-        print("leigv:", leigv)
+        #print("leigv:", leigv)
     asc_order = np.argsort(np.abs(leig))
     lambda0 = leig[asc_order[-1]]
     # if the dominant eigenvector has degeneracy, sum them in the same weight
@@ -104,28 +108,28 @@ def fix_gauge(Gamma, visualize=False):
     L0num = 1
     for idx in asc_order[::-1][1:]:
         if np.abs(leig[idx] - lambda0) < 1e-5:
-            L0 += leigv[:, idx]
+            L0 += np.random.uniform() * leigv[:, idx]
             L0num += 1
         else:
             break
-    L0 /= L0num
+    #L0 /= L0num
 
     reig, reigv = np.linalg.eig(Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1).T)
     if visualize:
-        print("gamma for r:", Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1).T)
+        print("gamma for r:", Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1).T[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
         print("reig:", reig)
-        print("reigv:", reigv)
+        #print("reigv:", reigv)
     asc_order = np.argsort(np.abs(reig))
     # if the dominant eigenvector has degeneracy, sum them in the same weight
     R0 = reigv[:,asc_order[-1]]
     R0num = 1
     for idx in asc_order[::-1][1:]:
         if np.abs(reig[idx] - lambda0) < 1e-5:
-            R0 += reigv[:, idx]
+            R0 += np.random.uniform() * reigv[:, idx]
             R0num += 1
         else:
             break
-    R0 /= R0num
+    #R0 /= R0num
 
     if visualize:
         print("lambda0, L0:", lambda0, L0)
@@ -161,7 +165,7 @@ def fix_gauge(Gamma, visualize=False):
 
     Gamma = oe.contract("iIjJ,ia,IA,bj,BJ->aAbB",Gamma,xinv,xinv.conj(),yinv,yinv.conj())
 
-    return Gamma, sigma
+    return Gamma, sigma, xinv, yinv
 
 def calc_cycle_entropy(Gamma, sigma):
     bond_dim = Gamma.shape[0]
@@ -171,7 +175,12 @@ def calc_cycle_entropy(Gamma, sigma):
     eig = np.abs(eig) / np.sum(np.abs(eig))
     return eig, -np.dot(eig, np.log2(eig+1e-15))
 
-def calc_optimal_truncation(Gamma, sigma, truncate_dim, visualize=False):
+def calc_optimal_truncation(Gamma, sigma, truncate_dim, trials=50, visualize=False):
+    if Gamma.shape[0] <= truncate_dim:
+        if visualize:
+            print("truncate dim already satistfied")
+        return None, None, None, 0.0, 0.0
+        
     if visualize:
         print(f"truncate from {Gamma.shape[0]} to {truncate_dim}")
 
@@ -183,11 +192,12 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, visualize=False):
     bond_dim = Gamma.shape[0]
 
     U, s, Vh = np.linalg.svd(sigma)
+    perm = np.random.permutation(sigma.shape[0])
+    U = U[perm]
+    Vh = Vh.T[perm].T
     U = U[:, :trun_dim]
     S = np.diag(s[:trun_dim])
     Vh = Vh[:trun_dim, :]
-
-    print(s, S)
 
     R = oe.contract("pq,qj->pj",S,Vh).flatten()
     P = oe.contract("iIjJ,ij,IP->PJ",Gamma,sigma,U.conj()).flatten()
@@ -202,22 +212,17 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, visualize=False):
 
     if np.isnan(Fid) or np.isinf(Fid):
         print("initial trace too small")
-        return None, None, 0.0
+        return None, None, None, 0.0, 0.0
     
-    if Fid > 1 + 1e-6:
+    if Fid > 1 + 1e-4:
         print("numerically unstable")
-        return None, None, 0.0
+        return None, None, None, 0.0, 0.0
     
     Rmax = None
 
-    past_fid = 0.0
+    past_fid = Fid
     past_trace = trace
-    first_fid = Fid
-    firstU = np.dot(U, S) / np.sqrt(trace)
-    firstVh = Vh
     try_idx = 0
-
-    trials = 20
 
     while (try_idx < trials):
         ## step1
@@ -226,15 +231,19 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, visualize=False):
         A = oe.contract("a,b->ab",P,P.conj())
         B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
 
+        if try_idx < 5:
+            B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
+
         Rmax = np.dot(np.linalg.pinv(B), P)
         trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
         Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
         if visualize:
             print(f"fid at trial {try_idx} step1: {Fid}")
         #if past_fid > Fid or Fid > 1.0 + 1e-6:
-        #    print("numerically unstable")
-        #    break
-        elif np.abs(Fid - past_fid) < 1e-8:
+        if Fid > 1.0 + 1e-4:
+            print("numerically unstable")
+            break
+        if np.abs(Fid - past_fid) < 1e-8:
             print("no more improvement")
             break
         past_fid = Fid
@@ -243,16 +252,14 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, visualize=False):
         Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
         S = np.dot(Utmp, np.diag(stmp))
 
-        """Binv = np.linalg.inv(B)
-        Aprime = np.dot(Binv, A)
-        eig, w = np.linalg.eig(Aprime)
-        print(eig)"""
-
         ## step2
         R = oe.contract("ip,pq->qi",U,S).flatten()
         P = oe.contract("iIjJ,ij,QJ->QI",Gamma,sigma,Vh.conj()).flatten()
         A = oe.contract("a,b->ab",P,P.conj())
         B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
+
+        if try_idx < 5:
+            B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
 
         Rmax = np.dot(np.linalg.pinv(B), P)
         trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
@@ -260,9 +267,10 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, visualize=False):
         if visualize:
             print(f"fid at trial {try_idx} step2: {Fid}")
         #if past_fid > Fid or Fid > 1.0 + 1e-6:
-        #    print("numerically unstable")
-        #    break
-        elif np.abs(Fid - past_fid) < 1e-8:
+        if Fid > 1.0 + 1e-6:
+            print("numerically unstable")
+            break
+        if np.abs(Fid - past_fid) < 1e-8:
             print("no more improvement")
             break
         past_fid = Fid
@@ -272,12 +280,5 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, visualize=False):
         S = np.dot(np.diag(stmp), Vhtmp)
 
         try_idx += 1
-    
-    if first_fid < past_fid:
-        Gamma = oe.contract("iIjJ,ip,qj,IP,QJ->pPqQ",Gamma,U,Vh,U.conj(),Vh.conj())
-        Fid = oe.contract("iIjJ,ij,IJ",Gamma,S,S)
-        if visualize:
-            print(f"fid after optimization: {Fid} {past_fid}")
-        return Gamma, S
-    else:
-        return Gamma, sigma
+
+    return U, S, Vh, past_fid, past_trace
