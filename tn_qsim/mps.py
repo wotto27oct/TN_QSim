@@ -209,7 +209,46 @@ class MPS(TensorNetwork):
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    def prepare_gamma(self, bond_idx):
+        node_list, output_edge_order = self.prepare_inner()
+
+        if bond_idx == 0:
+            edge_idx = 1
+        else:
+            edge_idx = 2
+
+        # split by bond_idx
+        node_list[bond_idx][edge_idx].disconnect("i", "j")
+        node_list[bond_idx+self.n][edge_idx].disconnect("I", "J")
+        edge_i = node_list[bond_idx][edge_idx]
+        edge_I = node_list[bond_idx+self.n][edge_idx]
+        edge_j = node_list[bond_idx+1][1]
+        edge_J = node_list[bond_idx+1+self.n][1]
+        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
+
+        return node_list, output_edge_order
+
+    def calc_gamma(self, bond_idx, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
+        """calc gamma of MPS state for gauge fixing
+
+        Args:
+            bond_idx (int) : the index of bond, leftmost is 0, rightmost is n-1
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_gamma(bond_idx)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
         
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
     def apply_gate(self, tidx, gtensor):
         """ apply nqubit gate
@@ -388,13 +427,17 @@ class MPS(TensorNetwork):
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threthold_err)
+                    if svd_node.tensor.shape[0] > 1:
+                        U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threthold_err, relative=True)
+                    else:
+                        U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threthold_err)
                     
                     # calc fidelity for normalization
-                    s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
-                    trun_s_sq = np.dot(trun_s, trun_s)
-                    fidelity = s_sq / (s_sq + trun_s_sq)
-                    total_fidelity *= fidelity
+                    if len(s.tensor) != 0:
+                        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+                        trun_s_sq = np.dot(trun_s, trun_s)
+                        fidelity = s_sq / (s_sq + trun_s_sq)
+                        total_fidelity *= fidelity
 
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)

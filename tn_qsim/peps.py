@@ -3,7 +3,9 @@ import tensornetwork as tn
 from tn_qsim.mpo import MPO
 from tn_qsim.mps import MPS
 from tn_qsim.general_tn import TensorNetwork
-from tn_qsim.utils import from_tn_to_quimb
+from tn_qsim.utils import *
+import opt_einsum as oe
+import copy
 
 class PEPS(TensorNetwork):
     """class of PEPS
@@ -411,6 +413,49 @@ class PEPS(TensorNetwork):
         self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
         return
 
+    def calc_inner_by_BMPS(self, truncate_dim=None, threthold=None, visualize=False):
+        # contract inner and physical dim
+        peps_tensors = []
+        for idx in range(self.n):
+            shape = self.nodes[idx].tensor.shape
+            tmp = oe.contract("abcde,aBCDE->bBcCdDeE",self.nodes[idx].tensor, self.nodes[idx].tensor.conj())
+            tmp = tmp.reshape(shape[1]**2, shape[2]**2, shape[3]**2, shape[4]**2)
+            peps_tensors.append(tmp)
+        
+        # suppose the dimension of down below (except for left or right edges) is 1
+        mps_tensors = []
+        for w in range(self.width):
+            tensor = peps_tensors[(self.height-1)*self.width+w]
+            shape = tensor.shape
+            if w == 0:
+                mps_tensors.append(tensor.reshape(shape[0],shape[1],shape[2]*shape[3]).transpose(0,2,1))
+            elif w == self.width-1:
+                mps_tensors.append(tensor.reshape(shape[0],shape[1]*shape[2],shape[3]).transpose(0,2,1))
+            else:
+                mps_tensors.append(tensor.reshape(shape[0],shape[1],shape[3]).transpose(0,2,1))
+
+        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threthold_err=1.0-threthold)
+        mps.canonicalization()
+
+        total_fid = 1.0
+        mps_tensors_list = [mps.tensors]
+        # boundary MPS
+        for h in range(self.height-2,-1,-1):
+            mpo_tensors = []
+            for w in range(self.width):
+                tensor = peps_tensors[h*self.width+w]
+                shape = tensor.shape
+                mpo_tensors.append(tensor.transpose(0,2,3,1))
+            mpo = MPO(mpo_tensors)
+            fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            #print("bmps mps-dim", mps.virtual_dims)
+            total_fid = total_fid * fid
+            if visualize:
+                print(f"fidelity: {fid}")
+                print(f"total fidelity: {total_fid}")
+                print(f"MPS virtual dims: {mps.virtual_dims}")
+
+        return mps.contract().flatten(), total_fid
     
     def prepare_foliation(self, cut_list):
         node_list, output_edge_order = self.prepare_inner()
@@ -466,7 +511,84 @@ class PEPS(TensorNetwork):
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    def prepare_Gamma(self, trun_node_idx):
+        trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
+        trun_edge_idx = 0
+        op_edge_idx = 0
+        if trun_node_idx - op_node_idx == self.width:
+            trun_edge_idx = 1
+            op_edge_idx = 3
+        elif trun_node_idx - op_node_idx == -1:
+            trun_edge_idx = 2
+            op_edge_idx = 4
+        elif trun_node_idx - op_node_idx == -self.width:
+            trun_edge_idx = 3
+            op_edge_idx = 1
+        else:
+            trun_edge_idx = 4
+            op_edge_idx = 2
+        
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+        
+        cp_nodes[trun_node_idx][trun_edge_idx].disconnect("i", "j")
+        cp_nodes[trun_node_idx+self.n][trun_edge_idx].disconnect("I", "J")
+        edge_i = cp_nodes[trun_node_idx][trun_edge_idx]
+        edge_I = cp_nodes[trun_node_idx+self.n][trun_edge_idx]
+        edge_j = cp_nodes[op_node_idx][op_edge_idx]
+        edge_J = cp_nodes[op_node_idx+self.n][op_edge_idx]
+        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        cp_nodes, output_edge_order1 = self.__clear_dangling(cp_nodes)
+        # crear all other output_edge
+        for i in range(len(output_edge_order1)//2):
+            tn.connect(output_edge_order1[i], output_edge_order1[i+len(output_edge_order1)//2])
+        node_list = [node for node in cp_nodes]
+
+        return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order
+
+    def find_Gamma_tree(self, trun_node_idx, algorithm=None, seq="ADCRS", visualize=False):
+        """find contraction tree of Gamma
+
+        Args:
+            trun_node_idx (list ofint) : the node index connected to the target edge
+            truncate_dim (int) : the target bond dimension
+            trial (int) : the number of iterations
+            visualize (bool) : if printing the optimization process or not
+        """
+        for i in range(self.n):
+            self.nodes[i].name = f"node{i}"
+        
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
+
+        if self.nodes[trun_node_idx][trun_edge_idx].dimension == 1:
+            return None, None
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
+        return tn, tree
     
+    def calc_Gamma(self, trun_node_idx, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=""):
+        """calc Gamma
+
+        Args:
+            trun_node_idx (int, int) : (trun_node_idx, op_node_idx)
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
     
     def __clear_dangling(self, cp_nodes):
         output_edge_order = []
@@ -683,8 +805,410 @@ class PEPS(TensorNetwork):
 
         return total_fidelity
 
+    def __apply_bond_matrix(self, trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh):
+        Unode = tn.Node(U)
+        Vhnode = tn.Node(Vh)
+        tn.connect(Unode[1], Vhnode[0])
+
+        left_edge, right_edge = self.nodes[trun_node_idx][trun_edge_idx].disconnect()
+        if left_edge.node1 != self.nodes[trun_node_idx]:
+            left_edge, right_edge = right_edge, left_edge
+        op_node = self.nodes[op_node_idx]
+
+        # connect self.node[trun_node_idx] and Unode
+        tn.connect(left_edge, Unode[0])
+        node_contract_list = [self.nodes[trun_node_idx], Unode]
+        node_edge_list = []
+        for i in range(5):
+            if i == trun_edge_idx:
+                node_edge_list.append(Unode[1])
+            else:
+                node_edge_list.append(self.nodes[trun_node_idx][i])
+        self.nodes[trun_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+        # connect op_node and Vhnode
+        tn.connect(Vhnode[1], right_edge)
+        node_contract_list = [op_node, Vhnode]
+        node_edge_list = []
+        for i in range(5):
+            if i == op_edge_idx:
+                node_edge_list.append(Vhnode[0])
+            else:
+                node_edge_list.append(op_node[i])
+        self.nodes[op_node_idx] = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+
+    def __contract_node_inner(self, idx):
+        shape = self.nodes[idx].tensor.shape
+        tmp = oe.contract("abcde,aBCDE->bBcCdDeE",self.nodes[idx].tensor, self.nodes[idx].tensor.conj())
+        tmp = tmp.reshape(shape[1]**2, shape[2]**2, shape[3]**2, shape[4]**2)
+        # contract dangling
+        # top
+        if idx < self.width:
+            if shape[1] != 1:
+                tmp = oe.contract("abcd,a->bcd",tmp,np.array([1,0,0,1])).reshape(1,shape[2]**2,shape[3]**2,shape[4]**2)
+        # right
+        if idx % self.width == self.width-1:
+            if shape[2] != 1:
+                tmp = oe.contract("abcd,b->acd",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,1,shape[3]**2,shape[4]**2)
+        # down
+        if idx >= self.n-self.width:
+            if shape[3] != 1:
+                tmp = oe.contract("abcd,c->abd",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,1,shape[4]**2)
+        # left
+        if idx % self.width == 0:
+            if shape[4] != 1:
+                tmp = oe.contract("abcd,d->abc",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,shape[3]**2,1)
+        return tmp
+
+    def __create_down_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+        # contract inner, physical and dangling dim
+        total_fid = 1.0
+        peps_tensors = []
+        for idx in range(self.n):
+            tmp = self.__contract_node_inner(idx)
+            peps_tensors.append(tmp)
+        
+        # BMPS from down right
+        mps_down_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
+        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_down.canonicalization()
+        mps_down_list = []
+        for h in range(self.height-1,-1,-1):
+            mpo_tensors = []
+            for w in range(self.width-1,-1,-1):
+                tensor = peps_tensors[h*self.width+w]
+                shape = tensor.shape
+                mpo_tensors.append(tensor.transpose(0,2,1,3))
+            mpo = MPO(mpo_tensors)
+            fid = mps_down.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            mps_down_list.append(copy.deepcopy(mps_down))
+            #print("bmps mps-dim", mps.virtual_dims)
+            total_fid = total_fid * fid
+            print(f"fidelity: {fid}")
+            print(f"total fidelity: {total_fid}")
+
+        mps_down_list = mps_down_list[::-1]
+        self.mps_down_list = mps_down_list
+        self.bmps_fidelity = total_fid
+
+        return mps_down_list, total_fid
+
+    def __create_right_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+        # contract inner, physical and dangling dim
+        total_fid = 1.0
+        peps_tensors = []
+        for idx in range(self.n):
+            tmp = self.__contract_node_inner(idx)
+            peps_tensors.append(tmp)
+        
+        # BMPS from down right
+        mps_right_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
+        mps_right = MPS(mps_right_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_right.canonicalization()
+        mps_right_list = []
+        for w in range(self.width-1,-1,-1):
+            mpo_tensors = []
+            for h in range(self.height-1,-1,-1):
+                tensor = peps_tensors[h*self.width+w]
+                shape = tensor.shape
+                mpo_tensors.append(tensor.transpose(3,1,2,0))
+            mpo = MPO(mpo_tensors)
+            fid = mps_right.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
+            mps_right_list.append(copy.deepcopy(mps_right))
+            #print("bmps mps-dim", mps.virtual_dims)
+            total_fid = total_fid * fid
+            print(f"fidelity: {fid}")
+            print(f"total fidelity: {total_fid}")
+
+        mps_right_list = mps_right_list[::-1]
+        self.mps_right_list = mps_right_list
+        self.bmps_fidelity = total_fid
+
+        return mps_right_list, total_fid
     
-    def prepare_Gamma(self, trun_node_idx):
+    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=20, gpu=True, is_calc_BMPS=True, is_fix_gauge=False, visualize=False):
+        total_fid = 1.0
+        mps_down_list, mps_right_list = None, None
+        if is_calc_BMPS:
+            mps_down_list, fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threthold)
+            total_fid *= fid
+        else:
+            mps_down_list = self.mps_down_list
+
+        # vertical FET from top left
+        # BMPS from top left
+        mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
+        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_top.canonicalization()
+
+        #for h in range(0):
+        for h in range(self.height-1):
+            # create top MPS
+            mpo_tensors = []
+            for w in range(self.width):
+                tmp = self.__contract_node_inner(h*self.width+w)
+                mpo_tensors.append(tmp.transpose(2,0,3,1))
+            mpo = MPO(mpo_tensors)
+            fid = mps_top.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            total_fid = total_fid * fid
+            for w in range(self.width):
+                # create Gamma to execute FET for each verical edges
+                if visualize:
+                    print(f"vertical h:{h} w:{w}")
+                    print("BMPS trace:", self.calc_inner_by_BMPS(threthold=bmps_threthold))
+                top_nodes = tn.replicate_nodes(mps_top.nodes)
+                down_nodes = tn.replicate_nodes(mps_down_list[h+1].nodes)
+                node_contract_list = []
+                for i in range(self.width):
+                    node_contract_list.append(top_nodes[i])
+                    node_contract_list.append(down_nodes[self.width-1-i])
+                    if i == w:
+                        continue
+                    tn.connect(top_nodes[i][0], down_nodes[self.width-1-i][0])
+                one = tn.Node(np.array([1]))
+                tn.connect(top_nodes[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(down_nodes[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(top_nodes[self.width-1][2], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(down_nodes[self.width-1][2], one[0])
+                node_contract_list.append(one)
+                output_edge_order = [top_nodes[w][0], down_nodes[self.width-1-w][0]]
+                Gamma = tn.contractors.auto(node_contract_list, output_edge_order=output_edge_order).tensor
+                shape = Gamma.shape
+                dim1 = int(np.sqrt(shape[0]))
+                dim2 = int(np.sqrt(shape[1]))
+                Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
+                sigma = np.eye(dim1)
+                ori_Gamma = Gamma
+
+                # fix gauge
+                if is_fix_gauge:
+                    Gamma, sigma, xinv, yinv = fix_gauge(Gamma, visualize=False)
+
+                    gnorm, snorm, xnorm, ynorm = np.linalg.norm(Gamma), np.linalg.norm(sigma), np.linalg.norm(xinv), np.linalg.norm(yinv)
+                    if gnorm > 1e5 or snorm > 1e5 or xnorm > 1e5 or ynorm > 1e5:
+                        print(f"unstable fixing, {gnorm} {snorm} {xnorm} {ynorm}")
+                        Gamma = ori_Gamma
+                        sigma = np.eye(sigma.shape[0])
+                        xinv = np.eye(xinv.shape[0])
+                        yinv = np.eye(yinv.shape[0])
+
+                    if visualize:
+                        print("Gamma after gauge fixing", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+                """Gamma, sigma = fix_gauge(Gamma, visualize=visualize)
+
+                if visualize:
+                    print("Gamma after gauge fixing", Gamma.reshape(Gamma.shape[0]**2, -1))
+                    print("is_WTG:", is_WTG(Gamma, sigma))
+                    print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                    sig = np.diag(sigma)
+                    sig = sig / np.linalg.norm(sig)
+                    print("WTG coef:", sig)"""
+                
+                # sigma = np.eye(dim1)
+
+                U, S, Vh, Fid = None, None, None, 1.0
+                truncate_dim = None
+                if threthold is not None:
+                    for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+                        if cur_truncate_dim == Gamma.shape[0]:
+                            print("no truncation done")
+                            U = None
+                            break
+                        for sd in range(10):
+                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
+                            truncate_dim = cur_truncate_dim
+                            if Fid > threthold:
+                                break
+                        if Fid > threthold:
+                            break
+                            
+                # if truncation is executed        
+                if U is not None:
+                    Unorm, Snorm, Vhnorm = np.linalg.norm(U), np.linalg.norm(S), np.linalg.norm(Vh)
+                    if Unorm > 1e3 or Snorm > 1e3 or Vhnorm > 1e3:
+                        print(f"optimal truncation unstable, {Unorm}, {Snorm}, {Vhnorm}")
+                        U = None
+
+                if U is not None:
+                    if visualize:
+                        Gamma = oe.contract("iIjJ,ip,qj,IP,QJ->pPqQ",Gamma,U,Vh,U.conj(),Vh.conj())
+                        sigma = S
+                        print("Gamma after optimal truncation", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+                    U = np.dot(U, S) / np.sqrt(trace)
+                    trun_node_idx = h*self.width+w
+                    trun_edge_idx = 3
+                    op_node_idx = (h+1)*self.width+w
+                    op_edge_idx = 1
+
+                    if is_fix_gauge:
+                        U = np.dot(xinv, U)
+                        Vh = np.dot(Vh, yinv)
+
+                    self.__apply_bond_matrix(trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh)
+
+                    print(f"truncate dim: {truncate_dim}")
+                    total_fid = total_fid * Fid
+                    print(f"fidelity: {Fid}")
+                    print(f"total fidelity: {total_fid}")
+
+                    # also for mps_top_nodes, mps_down_list
+                    Utensor = oe.contract("ij,IJ->jJiI",U,U.conj()).reshape(U.shape[1]**2,-1,1,1)
+                    mps_top.apply_MPO([w], MPO([Utensor]))
+
+                    Vhtensor = oe.contract("ij,IJ->iIjJ",Vh,Vh.conj()).reshape(Vh.shape[0]**2,-1,1,1)
+                    mps_down_list[h+1].apply_MPO([self.width-1-w], MPO([Vhtensor]))
+
+        # horizontal FET from top left
+
+        if is_calc_BMPS:
+            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threthold)
+            total_fid *= fid
+        else:
+            mps_right_list = self.mps_right_list
+
+        # BMPS from top left
+        mps_left_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
+        mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_left.canonicalization()
+
+        for w in range(self.width-1):
+        #for w in range(0):
+            # create top MPS
+            mpo_tensors = []
+            for h in range(self.height):
+                tmp = self.__contract_node_inner(h*self.width+w)
+                mpo_tensors.append(tmp.transpose(1,3,0,2))
+            mpo = MPO(mpo_tensors)
+            fid = mps_left.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
+            total_fid = total_fid * fid
+            for h in range(self.height):
+                if visualize:
+                    print(f"horizontal h:{h} w:{w}")
+                    inner_val , fid = self.calc_inner_by_BMPS(threthold=bmps_threthold)
+                    print(f"BMPS trace: {inner_val} fid:{fid}")
+                    if np.real_if_close(inner_val.item()) < 0.9999:
+                        print("inner calc error happened!!", inner_val)
+                left_node = tn.replicate_nodes(mps_left.nodes)
+                right_nodes = tn.replicate_nodes(mps_right_list[w+1].nodes)
+                node_contract_list = []
+                for i in range(self.height):
+                    node_contract_list.append(left_node[i])
+                    node_contract_list.append(right_nodes[self.height-1-i])
+                    if i == h:
+                        continue
+                    tn.connect(left_node[i][0], right_nodes[self.height-1-i][0])
+                one = tn.Node(np.array([1]))
+                tn.connect(left_node[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(right_nodes[0][1], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(left_node[self.height-1][2], one[0])
+                node_contract_list.append(one)
+                one = tn.Node(np.array([1]))
+                tn.connect(right_nodes[self.height-1][2], one[0])
+                node_contract_list.append(one)
+                output_edge_order = [left_node[h][0], right_nodes[self.height-1-h][0]]
+                Gamma = tn.contractors.auto(node_contract_list, output_edge_order=output_edge_order).tensor
+                shape = Gamma.shape
+                dim1 = int(np.sqrt(shape[0]))
+                dim2 = int(np.sqrt(shape[1]))
+                Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
+                sigma = np.eye(dim1)
+                ori_Gamma = Gamma
+
+                # fix gauge
+                if is_fix_gauge:
+                    Gamma, sigma, xinv, yinv = fix_gauge(Gamma, visualize=False)
+
+                    gnorm, snorm, xnorm, ynorm = np.linalg.norm(Gamma), np.linalg.norm(sigma), np.linalg.norm(xinv), np.linalg.norm(yinv)
+                    if gnorm > 1e5 or snorm > 1e5 or xnorm > 1e5 or ynorm > 1e5:
+                        print(f"unstable fixing, {gnorm} {snorm} {xnorm} {ynorm}")
+                        Gamma = ori_Gamma
+                        sigma = np.eye(sigma.shape[0])
+                        xinv = np.eye(xinv.shape[0])
+                        yinv = np.eye(yinv.shape[0])
+
+                    if visualize:
+                        print("Gamma after gauge fixing", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+
+                U, S, Vh, Fid = None, None, None, 1.0
+                truncate_dim = None
+                if threthold is not None:
+                    for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+                        if cur_truncate_dim == Gamma.shape[0]:
+                            print("no truncation done")
+                            U = None
+                            break
+                        for sd in range(10):
+                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
+                            truncate_dim = cur_truncate_dim
+                            if Fid > threthold:
+                                break
+                        if Fid > threthold:
+                            break
+                            
+                # if truncation is executed        
+                if U is not None:
+                    if visualize:
+                        Gamma = oe.contract("iIjJ,ip,qj,IP,QJ->pPqQ",Gamma,U,Vh,U.conj(),Vh.conj())
+                        sigma = S
+                        print("Gamma after optimal truncation", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("Fid from Gamma, S:", oe.contract("iIjJ,ij,IJ",Gamma,sigma,sigma))
+                        print("is_WTG:", is_WTG(Gamma, sigma))
+                        print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
+                        sig = np.diag(sigma)
+                        sig = sig / np.linalg.norm(sig)
+                        print("WTG coef:", sig)
+                    U = np.dot(U, S) / np.sqrt(trace)
+                    trun_node_idx = h*self.width+w
+                    trun_edge_idx = 2
+                    op_node_idx = h*self.width+w+1
+                    op_edge_idx = 4
+
+                    if is_fix_gauge:
+                        U = np.dot(xinv, U)
+                        Vh = np.dot(Vh, yinv)
+
+                    self.__apply_bond_matrix(trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh)
+
+                    print(f"truncate dim: {truncate_dim}")
+                    total_fid = total_fid * Fid
+                    print(f"fidelity: {Fid}")
+                    print(f"total fidelity: {total_fid}")
+
+                    # also for mps_left_nodes, mps_right_list
+                    Utensor = oe.contract("ij,IJ->jJiI",U,U.conj()).reshape(U.shape[1]**2,-1,1,1)
+                    mps_left.apply_MPO([h], MPO([Utensor]))
+
+                    Vhtensor = oe.contract("ij,IJ->iIjJ",Vh,Vh.conj()).reshape(Vh.shape[0]**2,-1,1,1)
+                    mps_right_list[w+1].apply_MPO([self.height-1-h], MPO([Vhtensor]))
+
+        return total_fid
+    
+    def prepare_Gamma_old(self, trun_node_idx):
         trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
         trun_edge_idx = 0
         op_edge_idx = 0
@@ -724,7 +1248,7 @@ class PEPS(TensorNetwork):
         return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order
 
 
-    def find_Gamma_tree(self, trun_node_idx, algorithm=None, memory_limit=None, visualize=False):
+    #def find_Gamma_tree(self, trun_node_idx, algorithm=None, memory_limit=None, visualize=False):
         """find contraction tree of Gamma
 
         Args:
@@ -733,13 +1257,13 @@ class PEPS(TensorNetwork):
             trial (int) : the number of iterations
             visualize (bool) : if printing the optimization process or not
         """
-        for i in range(self.n):
+        """for i in range(self.n):
             self.nodes[i].name = f"node{i}"
 
         trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
 
         tree, cost, sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        return tree, cost, sp_cost
+        return tree, cost, sp_cost"""
 
 
     def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False, calc_lim=None):
