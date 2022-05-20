@@ -8,7 +8,7 @@ import jax
 import functools
 
 class MERA3D(TensorNetwork):
-    """class of infinite MERA3D
+    """class of MERA3D for renormalization
 
     physical bond: 0, 1, ..., n-1
 
@@ -20,7 +20,7 @@ class MERA3D(TensorNetwork):
     Attributes:
         n (int) : the number of qubits
         Hnode (tn.Node) : Hamiltonian which we renormalize
-        top_edges (list of (int, int)) : the list of top edges
+        top_edges (list of (int, int)) : the list of top edges, (node_idx, edge_idx of node)
         top_nodes (list of tn.Node) : the list of nodes
         down_nodes (list of tn.Node) : the list of adjoint nodes
     """
@@ -92,18 +92,17 @@ class MERA3D(TensorNetwork):
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
-    def gen_renormalize_func(self, tree, gpunum):
+    def gen_renormalize_func(self, tree, backend="jax"):
         """generate renormalization function
 
         Args:
             tree (ctg.ContractionTree) : the contraction tree for renormalization
             gpunum (int) : the number of GPU we use
         Returns:
-            func : get sliced arrays and return renormalized hamiltonian
+            func : get sliced arrays and return renormalized hamiltonian, args (H, U1, U2, ..., U1.conj(), U2.conj(), ...)
         """
 
-        gpus = jax.devices('gpu')
-        return jax.jit(functools.partial(tree.contract_core, backend="jax"), device=gpus[i]))
+        return functools.partial(tree.contract_core, backend=backend)
     
     def visualize_renormalization(self, tn, tree):
         """calc contraction cost and visualize contract path for given tree and nodes
@@ -128,7 +127,7 @@ class MERA3D(TensorNetwork):
         Args:
             input_support (list of int) : list of qubit index we apply to.
             output_support (list of int) : list of qubit index of output.
-            tensor (np.array) : the tensor of Unitary or Isometry.
+            tensor (np.array) : the tensor of Unitary or Isometry.  shape:(input,...,input,output,...,output)
         """
         Unode = tn.Node(tensor)
         Adnode = tn.Node(tensor.conj())
@@ -145,18 +144,19 @@ class MERA3D(TensorNetwork):
         # connect edges
         for idx, tidx in enumerate(input_support):
             if self.top_edges[tidx] is None:
-                tn.connect(Unode[idx+len(output_support)], Adnode[idx+len(output_support)])
+                # connect themselves
+                tn.connect(Unode[idx], Adnode[idx])
             else:
-                tn.connect(Unode[idx+len(output_support)], self.top_nodes[self.top_edges[tidx][0]][self.top_edges[tidx][1]])
-                tn.connect(Adnode[idx+len(output_support)], self.down_nodes[self.down_edges[tidx][0]][self.down_edges[tidx][1]])
+                tn.connect(Unode[idx], self.top_nodes[self.top_edges[tidx][0]][self.top_edges[tidx][1]])
+                tn.connect(Adnode[idx], self.down_nodes[self.down_edges[tidx][0]][self.down_edges[tidx][1]])
         
         for tidx in input_support:
             self.top_edges[tidx] = None
             self.down_edges[tidx] = None
         
         for idx, tidx in enumerate(output_support):
-            self.top_edges[tidx] = [len(self.top_nodes)-1, idx]
-            self.down_edges[tidx] = [len(self.down_nodes)-1, idx]
+            self.top_edges[tidx] = [len(self.top_nodes)-1, len(input_support)+idx]
+            self.down_edges[tidx] = [len(self.down_nodes)-1, len(input_support)+idx]
 
     
     
