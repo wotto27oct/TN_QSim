@@ -36,7 +36,6 @@ class MERA3D(TensorNetwork):
             self.top_edges[t] = [0, idx]
             self.down_edges[t] = [0, len(tidx)+idx]
 
-    
     def prepare_renormalize(self):
         node_list = tn.replicate_nodes(self.top_nodes + self.down_nodes[1:])
 
@@ -54,7 +53,6 @@ class MERA3D(TensorNetwork):
                     output_edge_order.append(node_list[len(self.top_nodes)+self.down_edges[i][0]-1][self.down_edges[i][1]])
         
         return node_list, output_edge_order
-
     
     def find_renormalize_tree(self, algorithm=None, seq="", visualize=False):
         """compute contraction tree of renormalization
@@ -76,7 +74,6 @@ class MERA3D(TensorNetwork):
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
 
-
     def renormalize(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """renormalize MERA
 
@@ -92,6 +89,69 @@ class MERA3D(TensorNetwork):
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
+    def prepare_inv_renormalize(self, rho):
+        node_list = tn.replicate_nodes(self.top_nodes + self.down_nodes[1:])
+
+        # input edge of renormalized Hamiltonian
+        input_edge_order = []
+        for i in range(self.n):
+            if self.top_edges[i] is not None:
+                input_edge_order.append(node_list[self.top_edges[i][0]][self.top_edges[i][1]])
+        for i in range(self.n):
+            if self.down_edges[i] is not None:
+                # if 0, then Hamiltonian
+                if self.down_edges[i][0] == 0:
+                    input_edge_order.append(node_list[0][self.down_edges[i][1]])
+                else:
+                    input_edge_order.append(node_list[len(self.top_nodes)+self.down_edges[i][0]-1][self.down_edges[i][1]])
+        
+        input_rho_node = tn.Node(rho)
+        for i in range(len(input_edge_order)):
+            tn.connect(input_rho_node[i], input_edge_order[i])
+        
+        # output edge is original hamiltonian
+        output_edge_order = node_list[0].edges
+
+        node_list = [input_rho_node] + node_list[1:]
+        
+        return node_list, output_edge_order
+
+    def find_inv_renormalize_tree(self, rho, algorithm=None, seq="", visualize=False):
+        """compute contraction tree of inverse renormalization
+
+        Args:
+            rho (np.array) : the input reduced density op to be inv-renormalized
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+
+        node_list, output_edge_order = self.prepare_inv_renormalize(rho)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+    def inv_renormalize(self, rho, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """inv-renormalize MERA
+
+        Args:
+            algorithm : the algorithm to find contraction path
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_inv_renormalize(rho)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
     def gen_renormalize_func(self, tree, backend="jax"):
         """generate renormalization function
 
@@ -102,7 +162,16 @@ class MERA3D(TensorNetwork):
             func : get sliced arrays and return renormalized hamiltonian, args (H, U1, U2, ..., U1.conj(), U2.conj(), ...)
         """
 
-        return functools.partial(tree.contract_core, backend=backend)
+        def func(arrays):
+            contract_core = functools.partial(tree.contract_core, backend=backend)
+            slices = []
+            for i in range(tree.nslices):
+                slices.append(contract_core(tree.slice_arrays(arrays, i)))
+
+            x = tree.gather_slices(slices)
+            return x
+        
+        return func
     
     def visualize_renormalization(self, tn, tree):
         """calc contraction cost and visualize contract path for given tree and nodes
