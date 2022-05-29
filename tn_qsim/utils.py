@@ -175,7 +175,18 @@ def calc_cycle_entropy(Gamma, sigma):
     eig = np.abs(eig) / np.sum(np.abs(eig))
     return eig, -np.dot(eig, np.log2(eig+1e-15))
 
-def calc_optimal_truncation(Gamma, sigma, truncate_dim, trials=50, visualize=False):
+def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=50, visualize=False):
+    """calc optimal truncation given Gamma, sigma
+    Args:
+        Gamma (np.array) : env-tensor Gamma_iIjJ
+        sigma (np.array) : bond matrix sigma_ij
+        truncate_dim : target bond dimension
+        precision (float) : ignore improvement under precision, return unstable if fidelity > 1 + 10*precision
+        trials (int) : trial num
+    Returns:
+        U, S, Vh (np.array) : optimal truncated tensor, all matrix
+        fidelity, trace (float) : fidelity, trace after optimal truncation
+    """
     if Gamma.shape[0] <= truncate_dim:
         if visualize:
             print("truncate dim already satistfied")
@@ -239,11 +250,10 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, trials=50, visualize=Fal
         Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
         if visualize:
             print(f"fid at trial {try_idx} step1: {Fid}")
-        #if past_fid > Fid or Fid > 1.0 + 1e-6:
-        if Fid > 1.0 + 1e-4:
+        if Fid > 1.0 + 10*precision:
             print("numerically unstable")
             break
-        if np.abs(Fid - past_fid) < 1e-8:
+        if np.abs(Fid - past_fid) < precision:
             print("no more improvement")
             break
         past_fid = Fid
@@ -266,11 +276,10 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, trials=50, visualize=Fal
         Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
         if visualize:
             print(f"fid at trial {try_idx} step2: {Fid}")
-        #if past_fid > Fid or Fid > 1.0 + 1e-6:
-        if Fid > 1.0 + 1e-6:
+        if Fid > 1.0 + 10*precision:
             print("numerically unstable")
             break
-        if np.abs(Fid - past_fid) < 1e-8:
+        if np.abs(Fid - past_fid) < precision:
             print("no more improvement")
             break
         past_fid = Fid
