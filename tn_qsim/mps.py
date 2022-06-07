@@ -340,7 +340,7 @@ class MPS(TensorNetwork):
         return total_fidelity
 
 
-    def apply_MPO(self, tidx, mpo, is_normalize=True, is_return_history=False):
+    def apply_MPO(self, tidx, mpo, is_normalize=True, last_dir=None, is_return_history=False):
         """ apply MPO
 
         Args:
@@ -378,24 +378,41 @@ class MPS(TensorNetwork):
             node = mpo.nodes[0]
             node_contract_list = [node, self.nodes[tidx[0]]]
             node_edge_list = [node[0]] + [self.nodes[tidx[0]][j] for j in range(1, 3)]
-            one = tn.Node(np.array([1]))
-            tn.connect(node[2], one[0])
-            node_contract_list.append(one)
-            one2 = tn.Node(np.array([1]))
-            tn.connect(node[3], one2[0])
-            node_contract_list.append(one2)
+            if last_dir is None:
+                one = tn.Node(np.array([1]))
+                tn.connect(node[2], one[0])
+                node_contract_list.append(one)
+                one2 = tn.Node(np.array([1]))
+                tn.connect(node[3], one2[0])
+                node_contract_list.append(one2)
+            else:
+                node_edge_list += [node[2], node[3]]
             tn.connect(node[1], self.nodes[tidx[0]][0])
-            node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+            new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+            if last_dir is not None:
+                # TODO: unit test
+                tn.flatten_edges([new_node[1], new_node[3]]) # left
+                tn.flatten_edges([new_node[1], new_node[2]]) # right
+            node_list.append(new_node)
         else:
             for i, node in enumerate(mpo.nodes):
                 if i == 0:
                     node_contract_list = [node, self.nodes[tidx[i]]]
                     node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 3)] + [node[3]]
-                    one = tn.Node(np.array([1]))
-                    tn.connect(node[2], one[0])
-                    node_contract_list.append(one)
+                    if last_dir is None:
+                        one = tn.Node(np.array([1]))
+                        tn.connect(node[2], one[0])
+                        node_contract_list.append(one)
+                    else:
+                        node_edge_list.append(node[2])
                     tn.connect(node[1], self.nodes[tidx[i]][0])
-                    node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+                    new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+                    if last_dir is not None:
+                        # flatten left edges, 0, 1, 2, 3, 4 -> 0, 2, 3, (1,4) -> 0, (1,4), 2, 3
+                        tn.flatten_edges([new_node[1], new_node[4]])
+                        reorder_list = [new_node[i] for i in [0,3,1,2]]
+                        new_node.reorder_edges(reorder_list)
+                    node_list.append(new_node)
                     edge_list.append(node_edge_list)
                 else:
                     tn.connect(node[1], self.nodes[tidx[i]][0])
@@ -417,7 +434,7 @@ class MPS(TensorNetwork):
                     # contract left_R, right_R, node
                     svd_node_edge_list = None
                     svd_node_list = [lR, rR, node]
-                    if i == mpo.n - 1:
+                    if i == mpo.n - 1 and last_dir is None:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[3], one[0])
                         svd_node_edge_list = [qr_left_edge, node[0], qr_right_edge]
@@ -442,7 +459,7 @@ class MPS(TensorNetwork):
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     r_edge_order = None
-                    if i == mpo.n - 1:
+                    if i == mpo.n - 1 and last_dir is None:
                         if dir == 2: # right
                             r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]]
                         else:
@@ -452,7 +469,14 @@ class MPS(TensorNetwork):
                             r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]] + [Vh[2]]
                         else:
                             r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]] + [Vh[2]]
-                    node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
+                    new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
+                    if i == mpo.n - 1 and last_dir is not None:
+                        if last_dir == 2: # right:
+                            tn.flatten_edges([new_node[2], new_node[3]])
+                        else:
+                            # TODO: unit test
+                            raise ValueError("not implemented yet")
+                    node_list.append(new_node)
                 
                 if is_return_history:
                     tmp_mps_list = tn.replicate_nodes(node_list + self.nodes[len(node_list):])

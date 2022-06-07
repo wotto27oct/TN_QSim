@@ -235,6 +235,8 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
     past_trace = trace
     try_idx = 0
 
+    init_trial = 5
+
     while (try_idx < trials):
         ## step1
         R = oe.contract("pq,qj->pj",S,Vh).flatten()
@@ -242,7 +244,7 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         A = oe.contract("a,b->ab",P,P.conj())
         B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
 
-        if try_idx < 5:
+        if try_idx < init_trial:
             B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
 
         Rmax = np.dot(np.linalg.pinv(B), P)
@@ -250,12 +252,13 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
         if visualize:
             print(f"fid at trial {try_idx} step1: {Fid}")
-        if Fid > 1.0 + 10*precision:
-            print("numerically unstable")
-            break
-        if np.abs(Fid - past_fid) < precision:
-            print("no more improvement")
-            break
+        if try_idx >= init_trial:
+            if Fid > 1.0 + 10*precision:
+                print("numerically unstable")
+                break
+            if np.abs(Fid - past_fid) < precision:
+                print("no more improvement")
+                break
         past_fid = Fid
         past_trace = trace
 
@@ -268,7 +271,7 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         A = oe.contract("a,b->ab",P,P.conj())
         B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
 
-        if try_idx < 5:
+        if try_idx < init_trial:
             B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
 
         Rmax = np.dot(np.linalg.pinv(B), P)
@@ -276,12 +279,13 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / trace
         if visualize:
             print(f"fid at trial {try_idx} step2: {Fid}")
-        if Fid > 1.0 + 10*precision:
-            print("numerically unstable")
-            break
-        if np.abs(Fid - past_fid) < precision:
-            print("no more improvement")
-            break
+        if try_idx >= init_trial:
+            if Fid > 1.0 + 10*precision:
+                print("numerically unstable")
+                break
+            if np.abs(Fid - past_fid) < precision:
+                print("no more improvement")
+                break
         past_fid = Fid
         past_trace = trace
 

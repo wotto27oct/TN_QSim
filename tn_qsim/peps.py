@@ -638,8 +638,8 @@ class PEPS(TensorNetwork):
             self.nodes[tidx[i]] = node_list[i]
 
         return total_fidelity
-
-    def prepare_Gamma(self, trun_node_idx):
+    
+    def __return_idx_for_FET(self, trun_node_idx):
         trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
         trun_edge_idx = 0
         op_edge_idx = 0
@@ -655,6 +655,10 @@ class PEPS(TensorNetwork):
         else:
             trun_edge_idx = 4
             op_edge_idx = 2
+        return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx
+
+    def prepare_Gamma(self, trun_node_idx):
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx = self.__return_idx_for_FET(trun_node_idx)
         
         cp_nodes = tn.replicate_nodes(self.nodes)
         cp_nodes.extend(tn.replicate_nodes(self.nodes))
@@ -700,7 +704,7 @@ class PEPS(TensorNetwork):
         tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
         return tn, tree
     
-    def calc_Gamma(self, trun_node_idx, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=""):
+    def calc_Gamma(self, trun_node_idx, algorithm=None, tn=None, tree=None, output_inds=None, gpu=True, thread=1, seq=""):
         """calc Gamma
 
         Args:
@@ -710,12 +714,13 @@ class PEPS(TensorNetwork):
         Returns:
             np.array: tensor after contraction
         """
-
-        if tn is None:
+    
+        if tn is None or output_inds is None:
             trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx, node_list, output_edge_order = self.prepare_Gamma(trun_node_idx)
-            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+            tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq)
 
-        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+        return self.contract_tree_by_quimb(tn, tree=tree, output_inds=output_inds, gpu=gpu)
 
     def __apply_bond_matrix(self, trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh):
         Unode = tn.Node(U)
@@ -838,51 +843,28 @@ class PEPS(TensorNetwork):
 
         return mps_right_list, total_fid
 
-    def calc_horizontal_Gamma_by_BMPS(self, trun_node_idx, op_node_idx, bmps_truncate_dim=None, bmps_threthold=None, visualize=False):
+    def calc_horizontal_Gamma_by_BMPS(self, trun_node_idx, op_node_idx, bmps_truncate_dim=None, bmps_threshold=None, visualize=False):
+        # calc horizontal Gamma (i.e. trun_node_idx=0, op_node_idx=1 etc...)
+
+        if trun_node_idx > op_node_idx:
+            trun_node_idx, op_node_idx = op_node_idx, trun_node_idx
+            opposite_flag = True
+        else:
+            opposite_flag = False
+
         wpos = trun_node_idx % self.width
         hpos = trun_node_idx // self.width
 
-        total_fid = 1.0
         peps_tensors = []
         for idx in range(self.n):
             tmp = self.__contract_node_inner(idx)
             peps_tensors.append(tmp)
-        
-        # BMPS from top left
-        mps_left_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
-        mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
-        mps_left.canonicalization()
-        for w in range(wpos+1):
-            mpo_tensors = []
-            for h in range(self.height):
-                tensor = peps_tensors[h*self.width+w]
-                shape = tensor.shape
-                mpo_tensors.append(tensor.transpose(1,3,0,2))
-            mpo = MPO(mpo_tensors)
-            fid = mps_left.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
-            total_fid = total_fid * fid
-            if visualize:
-                print("bmps mps-dim for left BMPS", mps_left.virtual_dims)
-        if visualize:
-            print(f"total fidelity: {total_fid}")
 
-        # BMPS from top right
-        mps_right_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
-        mps_right = MPS(mps_right_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
-        mps_right.canonicalization()
-        for w in range(self.width-1, wpos, -1):
-            mpo_tensors = []
-            for h in range(self.height):
-                tensor = peps_tensors[h*self.width+w]
-                shape = tensor.shape
-                mpo_tensors.append(tensor.transpose(3,1,0,2))
-            mpo = MPO(mpo_tensors)
-            fid = mps_right.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
-            total_fid = total_fid * fid
-            if visualize:
-                print("bmps mps-dim for right BMPS", mps_right.virtual_dims)
-        if visualize:
-            print(f"total fidelity: {total_fid}")
+        # vertical BMPS from left
+        mps_left = self.calc_horizontal_BMPS(0, wpos+1, 0, self.height, bmps_truncate_dim, bmps_threshold, visualize)
+
+        # vertical BMPS from right
+        mps_right = self.calc_horizontal_BMPS(self.width-1, wpos, 0, self.width, bmps_truncate_dim, bmps_threshold, visualize)
 
         left_node = mps_left.nodes
         right_node = mps_right.nodes
@@ -910,53 +892,76 @@ class PEPS(TensorNetwork):
         shape = Gamma.shape
         dim1 = int(np.sqrt(shape[0]))
         Gamma = Gamma.reshape(dim1, dim1, dim1, dim1)
+
+        if opposite_flag:
+            Gamma = Gamma.transpose(2,3,0,1)
+        return Gamma
+
+    def calc_vertical_Gamma_by_BMPS(self, trun_node_idx, op_node_idx, bmps_truncate_dim=None, bmps_threshold=None, visualize=False):
+        # calc vertical Gamma (i.e. trun_node_idx=0, op_node_idx=width etc...)
+
+        if trun_node_idx > op_node_idx:
+            trun_node_idx, op_node_idx = op_node_idx, trun_node_idx
+            opposite_flag = True
+        else:
+            opposite_flag = False
+
+        wpos = trun_node_idx % self.width
+        hpos = trun_node_idx // self.width
+
+        peps_tensors = []
+        for idx in range(self.n):
+            tmp = self.__contract_node_inner(idx)
+            peps_tensors.append(tmp)
+        
+        # vertical BMPS from top
+        mps_top = self.calc_vertical_BMPS(0, hpos+1, bmps_truncate_dim, bmps_threshold, visualize)
+
+        # vertical BMPS from down
+        mps_down = self.calc_vertical_BMPS(self.height-1, hpos, bmps_truncate_dim, bmps_threshold, visualize)
+
+        # contract ladder tensor network
+
+        top_node = mps_top.nodes
+        down_node = mps_down.nodes
+        node_contract_list = []
+        for i in range(self.width):
+            node_contract_list.append(top_node[i])
+            node_contract_list.append(down_node[i])
+            if i == wpos:
+                continue
+            tn.connect(top_node[i][0], down_node[i][0])
+        one = tn.Node(np.array([1]))
+        tn.connect(top_node[0][1], one[0])
+        node_contract_list.append(one)
+        one = tn.Node(np.array([1]))
+        tn.connect(down_node[0][1], one[0])
+        node_contract_list.append(one)
+        one = tn.Node(np.array([1]))
+        tn.connect(top_node[self.width-1][2], one[0])
+        node_contract_list.append(one)
+        one = tn.Node(np.array([1]))
+        tn.connect(down_node[self.width-1][2], one[0])
+        node_contract_list.append(one)
+        output_edge_order = [top_node[wpos][0], down_node[wpos][0]]
+        Gamma = tn.contractors.auto(node_contract_list, output_edge_order=output_edge_order).tensor
+        shape = Gamma.shape
+        dim1 = int(np.sqrt(shape[0]))
+        Gamma = Gamma.reshape(dim1, dim1, dim1, dim1)
+
+        if opposite_flag:
+            Gamma = Gamma.transpose(2,3,0,1)
         return Gamma
         
     def calc_Gamma_by_BMPS(self, trun_node_idx, bmps_truncate_dim=None, bmps_threthold=None, visualize=False):
-        trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
-        trun_edge_idx = 0
-        op_edge_idx = 0
-        if trun_node_idx - op_node_idx == self.width:
-            trun_edge_idx = 1
-            op_edge_idx = 3
-        elif trun_node_idx - op_node_idx == -1:
-            trun_edge_idx = 2
-            op_edge_idx = 4
-        elif trun_node_idx - op_node_idx == -self.width:
-            trun_edge_idx = 1
-            op_edge_idx = 3
-            trun_node_idx, op_node_idx = op_node_idx, trun_node_idx
-        else:
-            trun_edge_idx = 2
-            op_edge_idx = 4
-            trun_node_idx, op_node_idx = op_node_idx, trun_node_idx
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx = self.__return_idx_for_FET(trun_node_idx)
 
-        if trun_edge_idx == 2:
+        if trun_edge_idx == 2 or trun_edge_idx == 4:
             return self.calc_horizontal_Gamma_by_BMPS(trun_node_idx, op_node_idx, bmps_truncate_dim, bmps_threthold, visualize=visualize)
         else:
-            return None
+            return self.calc_vertical_Gamma_by_BMPS(trun_node_idx, op_node_idx, bmps_truncate_dim, bmps_threthold, visualize=visualize)
 
-    def __return_idx_for_FET(self, trun_node_idx):
-        trun_node_idx, op_node_idx = trun_node_idx[0], trun_node_idx[1]
-        trun_edge_idx = 0
-        op_edge_idx = 0
-        if trun_node_idx - op_node_idx == self.width:
-            trun_edge_idx = 1
-            op_edge_idx = 3
-        elif trun_node_idx - op_node_idx == -1:
-            trun_edge_idx = 2
-            op_edge_idx = 4
-        elif trun_node_idx - op_node_idx == -self.width:
-            trun_edge_idx = 1
-            op_edge_idx = 3
-            trun_node_idx, op_node_idx = op_node_idx, trun_node_idx
-        else:
-            trun_edge_idx = 2
-            op_edge_idx = 4
-            trun_node_idx, op_node_idx = op_node_idx, trun_node_idx
-        return trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx
-
-    def bond_truncate_by_Gamma(self, trun_node_idx, Gamma, sigma, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=50, visualize=False):
+    def bond_truncate_by_Gamma(self, trun_node_idx, Gamma, sigma, xinv=None, yinv=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=50, visualize=False):
         """ calc bond truncation using Gamma and sigma and update PEPS
         
         Args:
@@ -968,6 +973,7 @@ class PEPS(TensorNetwork):
         return:
             Fid (float) : fidelity after optimal truncation
         """
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx = self.__return_idx_for_FET(trun_node_idx)
         U, S, Vh, Fid = None, None, None, 1.0
         truncate_dim = None
         if threshold is not None:
@@ -999,13 +1005,20 @@ class PEPS(TensorNetwork):
                 print("WTG coef:", sig)
             U = np.dot(U, S) / np.sqrt(trace)
 
+            if xinv is not None:
+                # in case fix_gauge
+                U = np.dot(xinv, U)
+                Vh = np.dot(Vh, yinv)
+
             self.__apply_bond_matrix(trun_node_idx, trun_edge_idx, op_node_idx, op_edge_idx, U, Vh)
 
             print(f"truncate dim: {truncate_dim}")
             print(f"fidelity: {Fid}")
-        return Fid
+            return Fid
+        else:
+            return 1.0
 
-    def bond_truncate_by_Gamma_exact(self, trun_node_idx, algorithm, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=50, visualize=False):
+    def bond_truncate_by_Gamma_exact(self, trun_node_idx, algorithm, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, try_fix_gauge=False, trials=50, visualize=False):
         """ calc bond truncation using exact Gamma and update PEPS
         
         Args:
@@ -1022,17 +1035,51 @@ class PEPS(TensorNetwork):
             return 1.0
 
         Gamma = self.calc_Gamma((trun_node_idx, op_node_idx), algorithm)
-        sigma = np.eye(Gamma.shape[0])
 
-        Fid = self.bond_truncate_by_Gamma((trun_node_idx, op_node_idx), Gamma, sigma, min_truncate_dim, max_truncate_dim, truncate_buff, threshold, trials, visualize)
+        if try_fix_gauge:
+            Gamma, sigma, xinv, yinv = fix_gauge(Gamma)
+        else:
+            sigma, xinv, yinv = np.eye(Gamma.shape[0]), None, None
+
+        print("Fid from Gamma, S:", oe.contract("iIjJ,ij,IJ",Gamma,sigma,sigma))
+        Fid = self.bond_truncate_by_Gamma((trun_node_idx, op_node_idx), Gamma, sigma, xinv, yinv, min_truncate_dim, max_truncate_dim, truncate_buff, threshold, trials, visualize)
+
+        return Fid
+
+    def bond_truncate_by_Gamma_BMPS(self, trun_node_idx, bmps_truncate_dim=None, bmps_threshold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, try_fix_gauge=False, trials=50, visualize=False):
+        """ calc bond truncation using BMPS Gamma for each bond and update PEPS
+        
+        Args:
+            trun_node_idx (int, int) : trun_node_idx, op_node_idx
+            bmps_truncate_dim, bmps_threshold (int, float) : bmps setting, bigger is better
+            min_truncate_dim, max_truncate_dim, truncate_buff (int) : info for truncate iteration
+            threshold (float) : needed fidelity
+            trials (int) : rep number for optimal truncation
+        return:
+            Fid (float) : fidelity after optimal truncation
+        """
+        trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx = self.__return_idx_for_FET(trun_node_idx)
+        if min_truncate_dim is not None and self.nodes[trun_node_idx][trun_edge_idx].dimension <= min_truncate_dim:
+            print("truncate dim already satisfied")
+            return 1.0
+
+        Gamma = self.calc_Gamma_by_BMPS((trun_node_idx, op_node_idx), bmps_truncate_dim, bmps_threshold, visualize)
+
+        if try_fix_gauge:
+            Gamma, sigma, xinv, yinv = fix_gauge(Gamma)
+        else:
+            sigma, xinv, yinv = np.eye(Gamma.shape[0]), None, None
+
+        print("Fid from Gamma, S:", oe.contract("iIjJ,ij,IJ",Gamma,sigma,sigma))
+        Fid = self.bond_truncate_by_Gamma((trun_node_idx, op_node_idx), Gamma, sigma, xinv, yinv, min_truncate_dim, max_truncate_dim, truncate_buff, threshold, trials, visualize)
 
         return Fid
         
-    def bond_truncate_by_Gamma_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=20, gpu=True, visualize=False):
+    def bond_truncate_by_Gamma_BMPS_old(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=20, gpu=True, visualize=False):
         total_fid = 1.0
         for w in range(self.width-1):
             for h in range(self.height):
-                self.regularize_PEPS(visualize=True)
+                self.regularize_PEPS()
                 
                 if visualize:
                     print(f"horizontal h:{h} w:{w}")
@@ -1545,6 +1592,9 @@ class PEPS(TensorNetwork):
         #print("calc Gamma...")
         Gamma = self.contract_tree_by_quimb(tn=tnq, tree=tree, output_inds=output_inds) #iIjJ
 
+
+        print("Fid from Gamma, S:", oe.contract("iIiI",Gamma))
+
         U, Vh, Fid = None, None, 1.0
         truncate_dim = None
         if threthold is not None:
@@ -1614,11 +1664,12 @@ class PEPS(TensorNetwork):
         print(f"truncated from {Gamma.shape[0]} to {truncate_dim}, Fidelity: {Fid}")
         return Fid
 
-    def calc_horizontal_BMPS(self, wstart, wend, bmps_truncate_dim, bmps_threshold=1.0, visualize=False):
+    def calc_horizontal_BMPS(self, wstart, wend, hstart, hend, bmps_truncate_dim=None, bmps_threshold=1.0, visualize=False):
         """execute BMPS in horizontal direction and return mps
 
         Args:
-            wstart, wend (int) : execute BMPS from [wstart, wend) or (wend, wstart]
+            wstart, wend (int) : execute horizontal BMPS from [wstart, wend) or (wend, wstart]
+            hstart, hend (int) : execute horizontal BMPS, supported on [hstart, hend) or (hend, hstart]
         """
         peps_tensors = []
         for idx in range(self.n):
@@ -1628,19 +1679,20 @@ class PEPS(TensorNetwork):
         total_fid = 1.0
         
         # horizontal BMPS
-        mps_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
-        mps_horizontal = MPS(mps_tensors, truncate_dim=bmps_truncate_dim)
+        mps_tensors = [np.array([1]).reshape(1,1,1) for _ in range(abs(hend - hstart))]
+        mps_horizontal = MPS(mps_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threshold)
         mps_horizontal.canonicalization()
-        step = 1 if wstart < wend else -1
+        wstep = 1 if wstart < wend else -1
+        hstep = 1 if hstart < hend else -1
+
         transpose_list = (1,3,0,2) if wstart < wend else (3,1,0,2)
-        for w in range(wstart, wend, step):
+        for w in range(wstart, wend, wstep):
             mpo_tensors = []
-            for h in range(self.height):
+            for h in range(hstart, hend, hstep):
                 tensor = peps_tensors[h*self.width+w]
-                shape = tensor.shape
                 mpo_tensors.append(tensor.transpose(transpose_list))
             mpo = MPO(mpo_tensors)
-            fid = mps_horizontal.apply_MPO([i for i in range(self.height)], mpo, is_normalize=False)
+            fid = mps_horizontal.apply_MPO([i for i in range(abs(hend - hstart))], mpo, is_normalize=False, last_dir=2)
             total_fid = total_fid * fid
             if visualize:
                 print("bmps mps-dim for horizontal BMPS", mps_horizontal.virtual_dims)
@@ -1648,11 +1700,12 @@ class PEPS(TensorNetwork):
             print(f"total fidelity: {total_fid}")
         return mps_horizontal
 
-    def calc_vertical_BMPS(self, hstart, hend, bmps_truncate_dim, bmps_threshold=1.0, visualize=False):
+    def calc_vertical_BMPS(self, hstart, hend, wstart, wend, bmps_truncate_dim=None, bmps_threshold=1.0, visualize=False):
         """execute BMPS in vertical direction and return mps
 
         Args:
-            hstart, hend (int) : execute BMPS from [hstart, hend) or (hend, hstart]
+            hstart, hend (int) : execute vertical BMPS from [hstart, hend) or (hend, hstart]
+            wstart, wend (int) : execute vertical BMPS, supported on [wstart, wend) or (wend, wstart]
         """
         peps_tensors = []
         for idx in range(self.n):
@@ -1662,19 +1715,20 @@ class PEPS(TensorNetwork):
         total_fid = 1.0
         
         # vertical BMPS
-        mps_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_vertical = MPS(mps_tensors, truncate_dim=bmps_truncate_dim)
+        mps_tensors = [np.array([1]).reshape(1,1,1) for _ in range(abs(wend - wstart))]
+        mps_vertical = MPS(mps_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threshold)
         mps_vertical.canonicalization()
-        step = 1 if hstart < hend else -1
+        hstep = 1 if hstart < hend else -1
+        wstep = 1 if wstart < wend else -1
+
         transpose_list = (2,0,3,1) if hstart < hend else (0,2,3,1)
-        for h in range(hstart, hend, step):
+        for h in range(hstart, hend, hstep):
             mpo_tensors = []
-            for w in range(self.width):
+            for w in range(wstart, wend, wstep):
                 tensor = peps_tensors[h*self.width+w]
-                shape = tensor.shape
                 mpo_tensors.append(tensor.transpose(transpose_list))
             mpo = MPO(mpo_tensors)
-            fid = mps_vertical.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            fid = mps_vertical.apply_MPO([i for i in range(abs(wend - wstart))], mpo, is_normalize=False, last_dir=2)
             total_fid = total_fid * fid
             if visualize:
                 print("bmps mps-dim for vertical BMPS", mps_vertical.virtual_dims)
@@ -1682,12 +1736,132 @@ class PEPS(TensorNetwork):
             print(f"total fidelity: {total_fid}")
         return mps_vertical
 
+    def calc_full_environment(self, left_idx, right_idx, top_idx, down_idx, bmps_threshold=None, visualize=False):
+        # return tensor which edges in order left, right, top, down
+
+        mps_left = self.calc_horizontal_BMPS(0, left_idx, 0, self.height, bmps_threshold=bmps_threshold, visualize=visualize)
+        mps_right = self.calc_horizontal_BMPS(self.width-1, right_idx, 0, self.height, bmps_threshold=bmps_threshold, visualize=visualize)
+        mps_top = self.calc_vertical_BMPS(0, top_idx, left_idx, right_idx+1, bmps_threshold=bmps_threshold, visualize=visualize)
+        mps_down = self.calc_vertical_BMPS(self.height-1, down_idx, left_idx, right_idx+1, bmps_threshold=bmps_threshold, visualize=visualize)
+
+        def create_corner_tensor(mps, start, end):
+            # contract [start, end) or (end, start] of mps
+
+            # in case of out of range
+            if start == end:
+                return np.array([1]).reshape(1,1)
+
+            ans = None
+            step = 1 if start < end else -1
+            for i in range(start, end, step):
+                if ans is None:
+                    ans = mps.tensors[i]
+                else:
+                    if step == 1:
+                        lbdim = ans.shape[1]
+                        rbdim = mps.tensors[i].shape[2]
+                        ans = oe.contract("abc,dce->adbe",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
+                    else:
+                        lbdim = mps.tnsors[i].shape[1]
+                        rbdim = ans.shape[2]
+                        ans = oe.contract("abc,deb->adec",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
+            return ans.reshape(ans.shape[0], -1)
+
+        top_left = tn.Node(create_corner_tensor(mps_left, 0, top_idx))
+        top_right = tn.Node(create_corner_tensor(mps_right, 0, top_idx))
+        down_left = tn.Node(create_corner_tensor(mps_left, down_idx+1, self.height))
+        down_right = tn.Node(create_corner_tensor(mps_right, down_idx+1, self.height))
+
+        node_list = [top_left, top_right, down_left, down_right]
+        output_edge_order = []
+
+        # left
+        for h in range(top_idx, down_idx+1):
+            tmp = tn.Node(mps_left.tensors[h])
+            output_edge_order.append(tmp[0])
+            if h == top_idx:
+                tn.connect(tmp[1], top_left[1])
+            else:
+                tn.connect(tmp[1], node_list[-1][2])
+            if h == down_idx:
+                tn.connect(tmp[2], down_left[1])
+            node_list.append(tmp)  
+        # right
+        for h in range(top_idx, down_idx+1):
+            tmp = tn.Node(mps_right.tensors[h])
+            output_edge_order.append(tmp[0])
+            if h == top_idx:
+                tn.connect(tmp[1], top_right[1])
+            else:
+                tn.connect(tmp[1], node_list[-1][2])
+            if h == down_idx:
+                tn.connect(tmp[2], down_right[1])
+            node_list.append(tmp)
+        # top
+        top_nodes = tn.replicate_nodes(mps_top.nodes)
+        for w in range(len(top_nodes)):
+            output_edge_order.append(top_nodes[w][0])
+        tn.connect(top_nodes[0][1], top_left[0])
+        tn.connect(top_nodes[-1][2], top_right[0])
+        node_list += top_nodes
+        # down
+        down_nodes = tn.replicate_nodes(mps_down.nodes)
+        for w in range(len(down_nodes)):
+            output_edge_order.append(down_nodes[w][0])
+        tn.connect(down_nodes[0][1], down_left[0])
+        tn.connect(down_nodes[-1][2], down_right[0])
+        node_list += down_nodes
+
+        env = tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
+        env_shape = []
+        env_transpose_list = [2*i for i in range(len(env.shape))] + [2*i+1 for i in range(len(env.shape))]
+        env_dim = 1
+        for s in env.shape:
+            ss = int(np.sqrt(s))
+            env_shape += [ss, ss]
+            env_dim *= ss
+        env = env.reshape(env_shape)
+        env = env.transpose(env_transpose_list)
+        env_eig = env.reshape(env_dim, env_dim)
+        eig, w = np.linalg.eig(env_eig)
+        print(eig)
+        print(env.shape)
+        return env
+
+        """tensors = []
+        tensors.append(create_corner_tensor(mps_left, 0, top_idx))
+        tensors.append(mps_top.tensors[left_idx])
+        tensors.append(mps_top.tensors[right_idx])
+        tensors.append(create_corner_tensor(mps_right, 0, top_idx))
+        tensors.append(mps_left.tensors[top_idx])
+        tensors.append(mps_left.tensors[down_idx])
+        tensors.append(mps_right.tensors[top_idx])
+        tensors.append(mps_right.tensors[down_idx])
+        tensors.append(create_corner_tensor(mps_left, down_idx+1, self.height))
+        tensors.append(mps_down.tensors[left_idx])
+        tensors.append(mps_down.tensors[right_idx])
+        tensors.append(create_corner_tensor(mps_right, down_idx+1, self.height))
+
+        env = oe.contract("ab,cab,edf,fg,hbi,jik,lgm,nmo,pk,qpr,srt,to->hjlnceqs",*tensors)
+        env_shape = []
+        env_dim = 1
+        for s in env.shape:
+            ss = int(np.sqrt(s))
+            env_shape += [ss, ss]
+            env_dim *= ss
+        env = env.reshape(env_shape)
+        env = env.transpose(0,2,4,6,8,10,12,14,1,3,5,7,9,11,13,15)
+        env_eig = env.reshape(env_dim, env_dim)
+        eig, w = np.linalg.eig(env_eig)
+        print(eig)
+        print(env.shape)
+        return env"""
 
     def calc_simple_environment(self, left_idx, right_idx, top_idx, down_idx, visualize=False):
-        mps_left = self.calc_horizontal_BMPS(0, left_idx, 1, visualize=visualize)
-        mps_right = self.calc_horizontal_BMPS(self.width-1, right_idx, 1, visualize=visualize)
-        mps_top = self.calc_vertical_BMPS(0, top_idx, 1, visualize=visualize)
-        mps_down = self.calc_vertical_BMPS(self.height-1, down_idx, 1, visualize=visualize)
+        mps_left = self.calc_horizontal_BMPS(0, left_idx, 0, self.height, 1, visualize=visualize)
+        mps_right = self.calc_horizontal_BMPS(self.width-1, right_idx, 0, self.height, 1, visualize=visualize)
+        mps_top = self.calc_vertical_BMPS(0, top_idx, 0, self.width, 1, visualize=visualize)
+        mps_down = self.calc_vertical_BMPS(self.height-1, down_idx, 0, self.width, 1, visualize=visualize)
 
         def convert_simple_env(mps, start, end):
             return [tensor.reshape(int(np.sqrt(tensor.shape[0])), -1) for tensor in mps.tensors[start:end+1]]
@@ -1833,6 +2007,143 @@ class PEPS(TensorNetwork):
 
 
         if fidelity < 1-1e-8:
+            print("truncation failed")
+            for i in range(self.height * self.width):
+                self.nodes[i].tensor = original_tensors[i]
+            return None
+        return fidelity
+
+    def calc_full_ALS(self, left_idx, right_idx, top_idx, down_idx, als_truncate_dim, threshold=1e-8, bmps_threshold=None, iters=10):
+        """update tensor by ALS using simple environment
+
+        Args:
+            left_idx, right_idx, top_idx, down_idx (int) : the updating area [left, right], [top, down]
+        """
+
+        # initialize new tensor
+        original_nodes = []
+        for h in range(top_idx, down_idx+1):
+            original_nodes += self.nodes[h*self.width+left_idx:h*self.width+right_idx+1]
+        original_nodes = tn.replicate_nodes(original_nodes)
+        new_nodes = tn.replicate_nodes(original_nodes)
+        area_height = down_idx - top_idx + 1
+        area_width = right_idx - left_idx + 1
+        area_num = area_height * area_width
+
+        for h in range(area_height):
+            for w in range(area_width):
+                shape = list(original_nodes[h*area_width+w].tensor.shape)
+                if w != 0:
+                    shape[4] = min(shape[4], als_truncate_dim)
+                if w != area_width-1:
+                    shape[2] = min(shape[2], als_truncate_dim)
+                if h != 0:
+                    shape[1] = min(shape[1], als_truncate_dim)
+                if h != area_height-1:
+                    shape[3] = min(shape[3], als_truncate_dim)
+                new_nodes[h*area_width+w].tensor = np.random.randn(*shape)
+
+        # define tensor A
+        tensorA_nodes = tn.replicate_nodes(new_nodes) + tn.replicate_nodes(new_nodes)
+        for idx in range(area_num, 2 * area_num):
+            tensorA_nodes[idx].tensor = tensorA_nodes[idx].tensor.conj()
+        for idx in range(area_num):
+            tn.connect(tensorA_nodes[idx][0], tensorA_nodes[idx+area_num][0])
+
+        # define tensor B
+        tensorB_nodes = tn.replicate_nodes(original_nodes) + tn.replicate_nodes(new_nodes)
+        for idx in range(area_num, 2 * area_num):
+            tensorB_nodes[idx].tensor = tensorB_nodes[idx].tensor.conj()
+        for idx in range(area_num):
+            tn.connect(tensorB_nodes[idx][0], tensorB_nodes[idx+area_num][0])
+
+        # connect full env
+        # left1, left2, right1, right2, top1, top2, down1, down2, (its conj ...)
+        env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
+        
+        def connect_full_env(node_list):
+            env = tn.Node(env_tensors)
+            edge_num = len(env_tensors.shape) // 2
+
+            # left, right, top, down
+            for h in range(area_height):
+                tn.connect(env[0+h], node_list[area_width*h][4])
+                tn.connect(env[edge_num+h], node_list[area_width*h+area_num][4])
+            for h in range(area_height):
+                tn.connect(env[area_height+h], node_list[area_width*h+area_width-1][2])
+                tn.connect(env[area_height+edge_num+h], node_list[area_width*h+area_width-1+area_num][2])
+
+            for w in range(area_width):
+                tn.connect(env[2*area_height+w], node_list[w][1])
+                tn.connect(env[2*area_height+edge_num+w], node_list[w+area_num][1])
+                tn.connect(env[2*area_height+area_width+w], node_list[(area_height-1)*area_width+w][3])
+                tn.connect(env[2*area_height+area_width+edge_num+w], node_list[(area_height-1)*area_width+w+area_num][3])
+            
+            node_list.append(env)
+            return node_list
+        
+        tensorA_nodes = connect_full_env(tensorA_nodes)
+        tensorB_nodes = connect_full_env(tensorB_nodes)
+
+        state_before = self.contract().flatten()
+        state_before /= np.linalg.norm(state_before)
+
+        original_tensors = self.tensors
+
+        for h in range(area_height):
+            for w in range(area_width):
+                self.nodes[(h+top_idx)*self.width+(w+left_idx)].tensor = tensorA_nodes[h*area_width+w].tensor
+                
+        state_after = self.contract().flatten()
+        state_after /= np.linalg.norm(state_after)
+        past_fid = np.dot(state_before, state_after)
+        print("initial fidelity:", past_fid)
+        fidelity = 0.0
+
+        for iter in range(iters):
+            for h in range(area_height):
+                for w in range(area_width):
+                    # print(f"iter:{iter} h:{h} w:{h}")
+                    tensor_shape = tensorA_nodes[h*area_width+w].tensor.shape
+                    tensor_dim = np.prod(tensor_shape[1:])
+
+                    contract_node_list = tn.replicate_nodes(tensorA_nodes)
+                    contract_node_list[h*area_width+w][0].disconnect()
+                    output_edge_orderA = contract_node_list[h*area_width+w+area_num].edges[1:]
+                    output_edge_orderA += contract_node_list[h*area_width+w].edges[1:]
+                    contract_node_list.pop(h*area_width+w+area_num)
+                    contract_node_list.pop(h*area_width+w)
+
+                    tensorA = tn.contractors.auto(contract_node_list, output_edge_order=output_edge_orderA).tensor.reshape(tensor_dim, -1)
+
+                    contract_node_list = tn.replicate_nodes(tensorB_nodes)
+                    output_edge_orderB = contract_node_list[h*area_width+w+area_num].edges
+                    contract_node_list.pop(h*area_width+w+area_num)
+                    tensorB = tn.contractors.auto(contract_node_list, output_edge_order=output_edge_orderB).tensor.reshape(-1, tensor_dim)
+
+                    tensorAinv = np.linalg.pinv(tensorA)
+                    newT = oe.contract("ab,cb->ca",tensorAinv,tensorB).reshape(tensor_shape)
+                    tensorA_nodes[h*area_width+w].tensor = newT
+                    tensorA_nodes[h*area_width+w+area_num].tensor = newT.conj()
+                    tensorB_nodes[h*area_width+w+area_num].tensor = newT.conj()
+
+            for h in range(area_height):
+                for w in range(area_width):
+                    self.nodes[(h+top_idx)*self.width+(w+left_idx)].tensor = tensorA_nodes[h*area_width+w].tensor
+
+            if iter == iters - 1:
+                state_after = self.contract().flatten()
+                state_after /= np.linalg.norm(state_after)
+                fidelity = np.dot(state_before, state_after)
+                print("iter:", iter, "fidelity:", fidelity)
+                #if np.abs(fidelity - past_fid) < 1e-8:
+                #    print("no more improvement")
+                #    break
+                #past_fid = fidelity
+                break
+
+
+        if fidelity < threshold:
             print("truncation failed")
             for i in range(self.height * self.width):
                 self.nodes[i].tensor = original_tensors[i]
