@@ -915,10 +915,10 @@ class PEPS(TensorNetwork):
             peps_tensors.append(tmp)
         
         # vertical BMPS from top
-        mps_top = self.calc_vertical_BMPS(0, hpos+1, bmps_truncate_dim, bmps_threshold, visualize)
+        mps_top = self.calc_vertical_BMPS(0, hpos+1, 0, self.width, bmps_truncate_dim, bmps_threshold, visualize)
 
         # vertical BMPS from down
-        mps_down = self.calc_vertical_BMPS(self.height-1, hpos, bmps_truncate_dim, bmps_threshold, visualize)
+        mps_down = self.calc_vertical_BMPS(self.height-1, hpos, 0, self.width, bmps_truncate_dim, bmps_threshold, visualize)
 
         # contract ladder tensor network
 
