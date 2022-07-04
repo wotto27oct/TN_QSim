@@ -288,34 +288,34 @@ class TensorNetwork():
         return tree, total_cost, max_sp_cost
 
 
-    def find_contract_tree_by_quimb(self, tn, output_inds, algorithm=None, seq="ADCRS", visualize=False):
+    def find_contract_tree_by_quimb(self, tnq, output_inds, algorithm=None, seq="ADCRS", visualize=False):
         #print(tn.get_equation())
         #print(tn.inner_inds())
         #print(tn.tensors[0].inds)
         #print(tn.outer_inds())
         #tn.draw()
         if visualize:
-            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+            print(f"before simplification  |V|: {tnq.num_tensors}, |E|: {tnq.num_indices}")
             #tn.draw()
-        tn = tn.full_simplify(seq, output_inds=output_inds)
+        tnq = tnq.full_simplify(seq, output_inds=output_inds)
         #print(tn.get_equation(output_inds))
         #print(tn.inner_inds())
         #print(tn.outer_inds())
-        if len(tn.tensors) == 1:
+        if len(tnq.tensors) == 1:
             if visualize:
                 print("tensor network becomes one tensor after simplification")
-            inputs, output, size_dict = tn.get_inputs_output_size_dict(output_inds=output_inds)
+            inputs, output, size_dict = tnq.get_inputs_output_size_dict(output_inds=output_inds)
             #print(inputs, output)
             tree = ctg.core.ContractionTree(inputs, output, size_dict, track_flops=True)
             tree.multiplicity = 1
             tree._flops = 1.0
             tree.sliced_inds = ""
-            return tn, tree
-        tree = tn.contraction_tree(optimize=algorithm, output_inds=output_inds)        
+            return tnq, tree
+        tree = tnq.contraction_tree(optimize=algorithm, output_inds=output_inds)        
         if visualize:
-            print(f"after simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+            print(f"after simplification  |V|: {tnq.num_tensors}, |E|: {tnq.num_indices}")
             print(f"slice: {tree.sliced_inds} tree cost: {tree.total_flops():,}, sp_cost: {tree.max_size():,}, log2_FLOP: {np.log2(tree.total_flops()):.4g} tree_width: {tree.contraction_width()}".encode("utf-8").strip())
-        return tn, tree
+        return tnq, tree
 
 
     def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, output_inds=None, target_size=None, gpu=True, thread=1, seq="ADCRS", is_visualize=False):   

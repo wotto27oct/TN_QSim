@@ -37,3 +37,5 @@ core*
 jet*
 taskflow
 2DMERA*
+*.yaml
+.DS_Store
