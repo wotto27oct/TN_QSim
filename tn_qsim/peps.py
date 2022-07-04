@@ -1824,8 +1824,8 @@ class PEPS(TensorNetwork):
         env = env.transpose(env_transpose_list)
         env_eig = env.reshape(env_dim, env_dim)
         eig, w = np.linalg.eig(env_eig)
-        print(eig)
-        print(env.shape)
+        #print(eig)
+        #print(env.shape)
         return env
 
         """tensors = []
@@ -2061,7 +2061,13 @@ class PEPS(TensorNetwork):
         # left1, left2, right1, right2, top1, top2, down1, down2, (its conj ...)
         env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
         
-        def connect_full_env(node_list):
+        true_env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, 1.0, visualize=False)
+
+        env_norm = np.linalg.norm(env_tensors.flatten() - true_env_tensors.flatten())
+        if env_norm > 1e-8:
+            print(f"bmps threshold {bmps_threshold}, environment 2norm: {env_norm}")
+
+        def connect_full_env(node_list, env_tensors):
             env = tn.Node(env_tensors)
             edge_num = len(env_tensors.shape) // 2
 
@@ -2082,8 +2088,8 @@ class PEPS(TensorNetwork):
             node_list.append(env)
             return node_list
         
-        tensorA_nodes = connect_full_env(tensorA_nodes)
-        tensorB_nodes = connect_full_env(tensorB_nodes)
+        tensorA_nodes = connect_full_env(tensorA_nodes, env_tensors)
+        tensorB_nodes = connect_full_env(tensorB_nodes, env_tensors)
 
         state_before = self.contract().flatten()
         state_before /= np.linalg.norm(state_before)
@@ -2120,6 +2126,12 @@ class PEPS(TensorNetwork):
                     output_edge_orderB = contract_node_list[h*area_width+w+area_num].edges
                     contract_node_list.pop(h*area_width+w+area_num)
                     tensorB = tn.contractors.auto(contract_node_list, output_edge_order=output_edge_orderB).tensor.reshape(-1, tensor_dim)
+
+                    # condition number
+                    if False:
+                        _, s, _ = np.linalg.svd(tensorA, full_matrices=False)
+                        smax, smin = max(s), min(s)
+                        print(f"condition number for iter{iter} h{h} w{w}: {smax / smin}")
 
                     tensorAinv = np.linalg.pinv(tensorA)
                     newT = oe.contract("ab,cb->ca",tensorAinv,tensorB).reshape(tensor_shape)
