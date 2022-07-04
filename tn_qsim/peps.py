@@ -1,4 +1,6 @@
+from codecs import ignore_errors
 import numpy as np
+from yaml import full_load_all
 import tensornetwork as tn
 from tn_qsim.mpo import MPO
 from tn_qsim.mps import MPS
@@ -1736,127 +1738,6 @@ class PEPS(TensorNetwork):
             print(f"total fidelity: {total_fid}")
         return mps_vertical
 
-    def calc_full_environment(self, left_idx, right_idx, top_idx, down_idx, bmps_threshold=None, visualize=False):
-        # return tensor which edges in order left, right, top, down
-
-        mps_left = self.calc_horizontal_BMPS(0, left_idx, 0, self.height, bmps_threshold=bmps_threshold, visualize=visualize)
-        mps_right = self.calc_horizontal_BMPS(self.width-1, right_idx, 0, self.height, bmps_threshold=bmps_threshold, visualize=visualize)
-        mps_top = self.calc_vertical_BMPS(0, top_idx, left_idx, right_idx+1, bmps_threshold=bmps_threshold, visualize=visualize)
-        mps_down = self.calc_vertical_BMPS(self.height-1, down_idx, left_idx, right_idx+1, bmps_threshold=bmps_threshold, visualize=visualize)
-
-        def create_corner_tensor(mps, start, end):
-            # contract [start, end) or (end, start] of mps
-
-            # in case of out of range
-            if start == end:
-                return np.array([1]).reshape(1,1)
-
-            ans = None
-            step = 1 if start < end else -1
-            for i in range(start, end, step):
-                if ans is None:
-                    ans = mps.tensors[i]
-                else:
-                    if step == 1:
-                        lbdim = ans.shape[1]
-                        rbdim = mps.tensors[i].shape[2]
-                        ans = oe.contract("abc,dce->adbe",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
-                    else:
-                        lbdim = mps.tnsors[i].shape[1]
-                        rbdim = ans.shape[2]
-                        ans = oe.contract("abc,deb->adec",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
-            return ans.reshape(ans.shape[0], -1)
-
-        top_left = tn.Node(create_corner_tensor(mps_left, 0, top_idx))
-        top_right = tn.Node(create_corner_tensor(mps_right, 0, top_idx))
-        down_left = tn.Node(create_corner_tensor(mps_left, down_idx+1, self.height))
-        down_right = tn.Node(create_corner_tensor(mps_right, down_idx+1, self.height))
-
-        node_list = [top_left, top_right, down_left, down_right]
-        output_edge_order = []
-
-        # left
-        for h in range(top_idx, down_idx+1):
-            tmp = tn.Node(mps_left.tensors[h])
-            output_edge_order.append(tmp[0])
-            if h == top_idx:
-                tn.connect(tmp[1], top_left[1])
-            else:
-                tn.connect(tmp[1], node_list[-1][2])
-            if h == down_idx:
-                tn.connect(tmp[2], down_left[1])
-            node_list.append(tmp)  
-        # right
-        for h in range(top_idx, down_idx+1):
-            tmp = tn.Node(mps_right.tensors[h])
-            output_edge_order.append(tmp[0])
-            if h == top_idx:
-                tn.connect(tmp[1], top_right[1])
-            else:
-                tn.connect(tmp[1], node_list[-1][2])
-            if h == down_idx:
-                tn.connect(tmp[2], down_right[1])
-            node_list.append(tmp)
-        # top
-        top_nodes = tn.replicate_nodes(mps_top.nodes)
-        for w in range(len(top_nodes)):
-            output_edge_order.append(top_nodes[w][0])
-        tn.connect(top_nodes[0][1], top_left[0])
-        tn.connect(top_nodes[-1][2], top_right[0])
-        node_list += top_nodes
-        # down
-        down_nodes = tn.replicate_nodes(mps_down.nodes)
-        for w in range(len(down_nodes)):
-            output_edge_order.append(down_nodes[w][0])
-        tn.connect(down_nodes[0][1], down_left[0])
-        tn.connect(down_nodes[-1][2], down_right[0])
-        node_list += down_nodes
-
-        env = tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
-        env_shape = []
-        env_transpose_list = [2*i for i in range(len(env.shape))] + [2*i+1 for i in range(len(env.shape))]
-        env_dim = 1
-        for s in env.shape:
-            ss = int(np.sqrt(s))
-            env_shape += [ss, ss]
-            env_dim *= ss
-        env = env.reshape(env_shape)
-        env = env.transpose(env_transpose_list)
-        env_eig = env.reshape(env_dim, env_dim)
-        eig, w = np.linalg.eig(env_eig)
-        #print(eig)
-        #print(env.shape)
-        return env
-
-        """tensors = []
-        tensors.append(create_corner_tensor(mps_left, 0, top_idx))
-        tensors.append(mps_top.tensors[left_idx])
-        tensors.append(mps_top.tensors[right_idx])
-        tensors.append(create_corner_tensor(mps_right, 0, top_idx))
-        tensors.append(mps_left.tensors[top_idx])
-        tensors.append(mps_left.tensors[down_idx])
-        tensors.append(mps_right.tensors[top_idx])
-        tensors.append(mps_right.tensors[down_idx])
-        tensors.append(create_corner_tensor(mps_left, down_idx+1, self.height))
-        tensors.append(mps_down.tensors[left_idx])
-        tensors.append(mps_down.tensors[right_idx])
-        tensors.append(create_corner_tensor(mps_right, down_idx+1, self.height))
-
-        env = oe.contract("ab,cab,edf,fg,hbi,jik,lgm,nmo,pk,qpr,srt,to->hjlnceqs",*tensors)
-        env_shape = []
-        env_dim = 1
-        for s in env.shape:
-            ss = int(np.sqrt(s))
-            env_shape += [ss, ss]
-            env_dim *= ss
-        env = env.reshape(env_shape)
-        env = env.transpose(0,2,4,6,8,10,12,14,1,3,5,7,9,11,13,15)
-        env_eig = env.reshape(env_dim, env_dim)
-        eig, w = np.linalg.eig(env_eig)
-        print(eig)
-        print(env.shape)
-        return env"""
-
     def calc_simple_environment(self, left_idx, right_idx, top_idx, down_idx, visualize=False):
         mps_left = self.calc_horizontal_BMPS(0, left_idx, 0, self.height, 1, visualize=visualize)
         mps_right = self.calc_horizontal_BMPS(self.width-1, right_idx, 0, self.height, 1, visualize=visualize)
@@ -2012,6 +1893,110 @@ class PEPS(TensorNetwork):
                 self.nodes[i].tensor = original_tensors[i]
             return None
         return fidelity
+    
+    def calc_full_environment(self, left_idx, right_idx, top_idx, down_idx, bmps_threshold=None, visualize=False):
+        # return tensor which edges in order left, right, top, down
+
+        mps_left = self.calc_horizontal_BMPS(0, left_idx, 0, self.height, bmps_threshold=bmps_threshold, visualize=visualize)
+        mps_right = self.calc_horizontal_BMPS(self.width-1, right_idx, 0, self.height, bmps_threshold=bmps_threshold, visualize=visualize)
+        mps_top = self.calc_vertical_BMPS(0, top_idx, left_idx, right_idx+1, bmps_threshold=bmps_threshold, visualize=visualize)
+        mps_down = self.calc_vertical_BMPS(self.height-1, down_idx, left_idx, right_idx+1, bmps_threshold=bmps_threshold, visualize=visualize)
+
+        def create_corner_tensor(mps, start, end):
+            # contract [start, end) or (end, start] of mps
+
+            # in case of out of range
+            if start == end:
+                return np.array([1]).reshape(1,1)
+
+            ans = None
+            step = 1 if start < end else -1
+            for i in range(start, end, step):
+                if ans is None:
+                    ans = mps.tensors[i]
+                else:
+                    if step == 1:
+                        lbdim = ans.shape[1]
+                        rbdim = mps.tensors[i].shape[2]
+                        ans = oe.contract("abc,dce->adbe",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
+                    else:
+                        lbdim = mps.tnsors[i].shape[1]
+                        rbdim = ans.shape[2]
+                        ans = oe.contract("abc,deb->adec",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
+            return ans.reshape(ans.shape[0], -1)
+
+        top_left = tn.Node(create_corner_tensor(mps_left, 0, top_idx))
+        top_right = tn.Node(create_corner_tensor(mps_right, 0, top_idx))
+        down_left = tn.Node(create_corner_tensor(mps_left, down_idx+1, self.height))
+        down_right = tn.Node(create_corner_tensor(mps_right, down_idx+1, self.height))
+
+        node_list = [top_left, top_right, down_left, down_right]
+        output_edge_order = []
+
+        # left
+        for h in range(top_idx, down_idx+1):
+            tmp = tn.Node(mps_left.tensors[h])
+            output_edge_order.append(tmp[0])
+            if h == top_idx:
+                tn.connect(tmp[1], top_left[1])
+            else:
+                tn.connect(tmp[1], node_list[-1][2])
+            if h == down_idx:
+                tn.connect(tmp[2], down_left[1])
+            node_list.append(tmp)  
+        # right
+        for h in range(top_idx, down_idx+1):
+            tmp = tn.Node(mps_right.tensors[h])
+            output_edge_order.append(tmp[0])
+            if h == top_idx:
+                tn.connect(tmp[1], top_right[1])
+            else:
+                tn.connect(tmp[1], node_list[-1][2])
+            if h == down_idx:
+                tn.connect(tmp[2], down_right[1])
+            node_list.append(tmp)
+        # top
+        top_nodes = tn.replicate_nodes(mps_top.nodes)
+        for w in range(len(top_nodes)):
+            output_edge_order.append(top_nodes[w][0])
+        tn.connect(top_nodes[0][1], top_left[0])
+        tn.connect(top_nodes[-1][2], top_right[0])
+        node_list += top_nodes
+        # down
+        down_nodes = tn.replicate_nodes(mps_down.nodes)
+        for w in range(len(down_nodes)):
+            output_edge_order.append(down_nodes[w][0])
+        tn.connect(down_nodes[0][1], down_left[0])
+        tn.connect(down_nodes[-1][2], down_right[0])
+        node_list += down_nodes
+
+        # split nodes
+        split_output_edge_order = []
+        split_output_edge_order2 = []
+        # splitした時，splitしたedgeはshapeの後ろにtransposeされる
+        for edge in output_edge_order:
+            edim = int(np.sqrt(edge.dimension))
+            split_edges = tn.split_edge(edge, shape=(edim, edim), new_edge_names=["1", "2"])
+            split_output_edge_order.append(split_edges[0])
+            split_output_edge_order2.append(split_edges[1])
+
+        return node_list, split_output_edge_order + split_output_edge_order2
+
+        """env = tn.contractors.auto(node_list, output_edge_order=output_edge_order).tensor
+        env_shape = []
+        env_transpose_list = [2*i for i in range(len(env.shape))] + [2*i+1 for i in range(len(env.shape))]
+        env_dim = 1
+        for s in env.shape:
+            ss = int(np.sqrt(s))
+            env_shape += [ss, ss]
+            env_dim *= ss
+        env = env.reshape(env_shape)
+        env = env.transpose(env_transpose_list)
+        env_eig = env.reshape(env_dim, env_dim)
+        eig, w = np.linalg.eig(env_eig)
+        #print(eig)
+        #print(env.shape)
+        return env"""
 
     def calc_full_ALS(self, left_idx, right_idx, top_idx, down_idx, als_truncate_dim, threshold=1e-8, bmps_threshold=None, iters=10):
         """update tensor by ALS using simple environment
@@ -2059,15 +2044,49 @@ class PEPS(TensorNetwork):
 
         # connect full env
         # left1, left2, right1, right2, top1, top2, down1, down2, (its conj ...)
-        env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
+        # env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
         
-        true_env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, 1.0, visualize=False)
+        env_nodes, env_output_edges = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
+        # split_edgesした時にaxis namesがバグるのを仕方なく修正
+        for node in env_nodes:
+            node.axis_names = [f"{i}" for i in range(len(node.tensor.shape))]
+        """env_tensor = tn.contractors.auto(env_nodes, env_output_edges).tensor
+        print(env_tensor.shape)
+        env_tensor = env_tensor.reshape(8, 8)
+        eig, w = np.linalg.eig(env_tensor)
+        print(eig)"""
+        
+        """true_env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, 1.0, visualize=False)
 
         env_norm = np.linalg.norm(env_tensors.flatten() - true_env_tensors.flatten())
         if env_norm > 1e-8:
-            print(f"bmps threshold {bmps_threshold}, environment 2norm: {env_norm}")
+            print(f"bmps threshold {bmps_threshold}, environment 2norm: {env_norm}")"""
 
-        def connect_full_env(node_list, env_tensors):
+
+        def connect_full_env(node_list, env_nodes):
+            env = tn.replicate_nodes(env_nodes)
+
+            # left, right, top, down
+            for h in range(area_height):
+                tn.connect(env[4+h][2], node_list[area_width*h][4])
+                tn.connect(env[4+h][3], node_list[area_width*h+area_num][4])
+            for h in range(area_height):
+                tn.connect(env[4+area_height+h][2], node_list[area_width*h+area_width-1][2])
+                tn.connect(env[4+area_height+h][3], node_list[area_width*h+area_width-1+area_num][2])
+
+            for w in range(area_width):
+                tn.connect(env[4+2*area_height+w][2], node_list[w][1])
+                tn.connect(env[4+2*area_height+w][3], node_list[w+area_num][1])
+                tn.connect(env[4+2*area_height+area_width+w][2], node_list[(area_height-1)*area_width+w][3])
+                tn.connect(env[4+2*area_height+area_width+w][3], node_list[(area_height-1)*area_width+w+area_num][3])
+            
+            node_list += env
+            return node_list
+        
+        tensorA_nodes = connect_full_env(tensorA_nodes, env_nodes)
+        tensorB_nodes = connect_full_env(tensorB_nodes, env_nodes)
+
+        """def connect_full_env(node_list, env_tensors):
             env = tn.Node(env_tensors)
             edge_num = len(env_tensors.shape) // 2
 
@@ -2089,7 +2108,53 @@ class PEPS(TensorNetwork):
             return node_list
         
         tensorA_nodes = connect_full_env(tensorA_nodes, env_tensors)
-        tensorB_nodes = connect_full_env(tensorB_nodes, env_tensors)
+        tensorB_nodes = connect_full_env(tensorB_nodes, env_tensors)"""
+
+        # fix gauge
+        """def create_gaugeX(h, w):
+            tensor_shape = tensorA_nodes[h*area_width+w].tensor.shape
+            tensor_dim = np.prod(tensor_shape[1:])
+            
+            contract_node_list = tn.replicate_nodes(tensorA_nodes)
+
+            output_edge_orderG = contract_node_list[h*area_width+w].edges[1:]
+            output_edge_orderG += contract_node_list[h*area_width+w+area_num].edges[1:]
+            contract_node_list.pop(h*area_width+w+area_num)
+            contract_node_list.pop(h*area_width+w)
+            tensorG = tn.contractors.auto(contract_node_list, output_edge_order=output_edge_orderG).tensor.reshape(tensor_dim, -1)
+            return tensorG
+
+        # left(3), right(1), top(0), down(2)
+        def create_gauge_tensor(h, w, dir):
+            X_shape = list(tensorA_nodes[h*area_width+w].tensor.shape[1:])
+            gauge_bdim = X_shape[dir]
+            tensorG = create_gaugeX(h, w)  # hermite matrix
+            U, s, Uh = np.linalg.svd(tensorG, full_matrices=False)
+            X = np.dot(U, np.diag(np.sqrt(s)))
+            transpose_list = [i for i in range(5) if i != dir] + [dir]
+            X = X.reshape(X_shape+[-1]).transpose(transpose_list).reshape(-1,gauge_bdim)
+            Q, R = np.linalg.qr(X)
+            return R
+
+        # left
+        left_gauge_tensors = []
+        for h in range(area_height):
+            R = create_gauge_tensor(h, 0, 3)
+            left_gauge_tensors.append(R)
+        # right
+        for h in range(area_height):
+            R = create_gauge_tensor(h, area_width-1, 1)
+            print(R.shape)
+        # top
+        for w in range(area_width):
+            R = create_gauge_tensor(0, w, 0)
+            print(R.shape)
+        # down
+        for w in range(area_width):
+            R = create_gauge_tensor(area_height-1, w, 0)
+            print(R.shape)
+        
+        exit()"""
 
         state_before = self.contract().flatten()
         state_before /= np.linalg.norm(state_before)
@@ -2106,6 +2171,8 @@ class PEPS(TensorNetwork):
         print("initial fidelity:", past_fid)
         fidelity = 0.0
 
+        max_condition_num = 0.0
+
         for iter in range(iters):
             for h in range(area_height):
                 for w in range(area_width):
@@ -2120,6 +2187,9 @@ class PEPS(TensorNetwork):
                     contract_node_list.pop(h*area_width+w+area_num)
                     contract_node_list.pop(h*area_width+w)
 
+                    #tmp = tn.contractors.auto(contract_node_list, ignore_edge_order=True).tensor
+                    #print(tmp.shape)
+
                     tensorA = tn.contractors.auto(contract_node_list, output_edge_order=output_edge_orderA).tensor.reshape(tensor_dim, -1)
 
                     contract_node_list = tn.replicate_nodes(tensorB_nodes)
@@ -2128,10 +2198,9 @@ class PEPS(TensorNetwork):
                     tensorB = tn.contractors.auto(contract_node_list, output_edge_order=output_edge_orderB).tensor.reshape(-1, tensor_dim)
 
                     # condition number
-                    if False:
-                        _, s, _ = np.linalg.svd(tensorA, full_matrices=False)
-                        smax, smin = max(s), min(s)
-                        print(f"condition number for iter{iter} h{h} w{w}: {smax / smin}")
+                    _, s, _ = np.linalg.svd(tensorA, full_matrices=False)
+                    smax, smin = max(s), min(s)
+                    max_condition_num = max(max_condition_num, smax/smin)
 
                     tensorAinv = np.linalg.pinv(tensorA)
                     newT = oe.contract("ab,cb->ca",tensorAinv,tensorB).reshape(tensor_shape)
@@ -2153,6 +2222,8 @@ class PEPS(TensorNetwork):
                 #    break
                 #past_fid = fidelity
                 break
+        
+        print(f"max condition number : {smax / smin}")
 
 
         if fidelity < threshold:
