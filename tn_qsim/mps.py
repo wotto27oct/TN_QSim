@@ -2,6 +2,7 @@ import numpy as np
 import opt_einsum as oe
 import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
+from tn_qsim.utils import from_tn_to_quimb
 
 class MPS(TensorNetwork):
     """class of MPS
@@ -59,7 +60,195 @@ class MPS(TensorNetwork):
         for i in range(self.n):
             output_edge_order.append(cp_nodes[i][0])
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
+
+
+    def prepare_inner(self):
+        cp_nodes = tn.replicate_nodes(self.nodes)
+        cp_nodes.extend(tn.replicate_nodes(self.nodes))
+        output_edge_order = []
+
+        def clear_dangling(node_idx, dangling_index):
+            one = tn.Node(np.array([1]))
+            tn.connect(cp_nodes[node_idx][dangling_index], one[0])
+            edge_order = []
+            for i in range(len(cp_nodes[node_idx].edges)):
+                if i != dangling_index:
+                    edge_order.append(cp_nodes[node_idx][i])
+            cp_nodes[node_idx] = tn.contractors.auto([cp_nodes[node_idx], one], edge_order)
+
+        for i in range(self.n):
+            cp_nodes[i+self.n].tensor = cp_nodes[i+self.n].tensor.conj()
+            tn.connect(cp_nodes[i][0], cp_nodes[i+self.n][0])
+
+        # if there are dangling edges which dimension is 1, contract first (including inner dim)
+        clear_dangling(0, 1)
+        clear_dangling(self.n, 1)
+        clear_dangling(self.n-1, 2)
+        clear_dangling(2*self.n-1, 2)
+        node_list = [node for node in cp_nodes]
+
+        return node_list, output_edge_order
+
+    
+    def calc_inner(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
+        """calc inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_inner()
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
         
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
+
+
+    def find_inner_tree(self, algorithm=None, seq="ADCRS", visualize=False):
+        """find contraction path of inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_inner()
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
+
+        return tn, tree
+
+    
+    def visualize_inner_tree(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+        """find contraction path of inner product of PEPS state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            tree (ctg.ContractionTree) : the contraction tree
+            total_cost (int) : total temporal cost
+            max_sp_cost (int) : max spatial cost
+        """
+
+        node_list, output_edge_order = self.prepare_inner()
+
+        if tree is None and path is None:
+            raise ValueError("tree or path is needed for visualization")
+
+        self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
+        return
+
+    
+    def prepare_foliation(self, cut_list):
+        node_list, output_edge_order = self.prepare_inner()
+
+        rho_edge_order1 = []
+        rho_edge_order2 = []
+        for node_idx1, edge_idx1, node_idx2, edge_idx2 in cut_list:
+            if node_list[node_idx1][edge_idx1] != node_list[node_idx2][edge_idx2]:
+                print("error! cut_list is not correct", node_idx1, edge_idx1)
+            node_list[node_idx1][edge_idx1].disconnect()
+            rho_edge_order1.append(node_list[node_idx1][edge_idx1])
+            rho_edge_order2.append(node_list[node_idx2][edge_idx2])
+        
+        output_edge_order = rho_edge_order1 + rho_edge_order2
+
+        return node_list, output_edge_order
+
+
+    def find_calc_foliation(self, cut_list, algorithm=None, seq="ADCRS", visualize=False):
+        """find calc_foliation contraction path by using quimb
+
+        Args:
+            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            tn (TensorNetwork) : tn for contract
+            tree (ContractionTree) : contraction tree for contract
+        """
+
+        node_list, output_edge_order = self.prepare_foliation(cut_list)
+
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        if visualize:
+            print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
+
+        return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
+
+
+    def calc_foliation(self, cut_list=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+        """calc foliation of MERA state
+
+        Args:
+            algorithm : the algorithm to find contraction path
+
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        if tn is None:
+            node_list, output_edge_order = self.prepare_foliation(cut_list)
+            tn, _ = from_tn_to_quimb(node_list, output_edge_order)
+
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
+
+    def prepare_gamma(self, bond_idx):
+        node_list, output_edge_order = self.prepare_inner()
+
+        if bond_idx == 0:
+            edge_idx = 1
+        else:
+            edge_idx = 2
+
+        # split by bond_idx
+        node_list[bond_idx][edge_idx].disconnect("i", "j")
+        node_list[bond_idx+self.n][edge_idx].disconnect("I", "J")
+        edge_i = node_list[bond_idx][edge_idx]
+        edge_I = node_list[bond_idx+self.n][edge_idx]
+        edge_j = node_list[bond_idx+1][1]
+        edge_J = node_list[bond_idx+1+self.n][1]
+        output_edge_order = [edge_i, edge_I, edge_j, edge_J]
+
+        return node_list, output_edge_order
+
+    def calc_gamma(self, bond_idx, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
+        """calc gamma of MPS state for gauge fixing
+
+        Args:
+            bond_idx (int) : the index of bond, leftmost is 0, rightmost is n-1
+            algorithm : the algorithm to find contraction path
+            memory_limit : the maximum sp cost in contraction path
+            tree (ctg.ContractionTree) : the contraction tree
+            path (list of tuple of int) : the contraction path
+            visualize (bool) : if visualize whole contraction process
+        Returns:
+            np.array: tensor after contraction
+        """
+
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_gamma(bond_idx)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
     def apply_gate(self, tidx, gtensor):
         """ apply nqubit gate
@@ -151,7 +340,7 @@ class MPS(TensorNetwork):
         return total_fidelity
 
 
-    def apply_MPO(self, tidx, mpo, is_normalize=True):
+    def apply_MPO(self, tidx, mpo, is_normalize=True, last_dir=None, is_return_history=False):
         """ apply MPO
 
         Args:
@@ -184,28 +373,46 @@ class MPS(TensorNetwork):
             
         edge_list = []
         node_list = []
+        mps_list = []
         if len(tidx) == 1:
             node = mpo.nodes[0]
             node_contract_list = [node, self.nodes[tidx[0]]]
             node_edge_list = [node[0]] + [self.nodes[tidx[0]][j] for j in range(1, 3)]
-            one = tn.Node(np.array([1]))
-            tn.connect(node[2], one[0])
-            node_contract_list.append(one)
-            one2 = tn.Node(np.array([1]))
-            tn.connect(node[3], one2[0])
-            node_contract_list.append(one2)
+            if last_dir is None:
+                one = tn.Node(np.array([1]))
+                tn.connect(node[2], one[0])
+                node_contract_list.append(one)
+                one2 = tn.Node(np.array([1]))
+                tn.connect(node[3], one2[0])
+                node_contract_list.append(one2)
+            else:
+                node_edge_list += [node[2], node[3]]
             tn.connect(node[1], self.nodes[tidx[0]][0])
-            node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+            new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+            if last_dir is not None:
+                # TODO: unit test
+                tn.flatten_edges([new_node[1], new_node[3]]) # left
+                tn.flatten_edges([new_node[1], new_node[2]]) # right
+            node_list.append(new_node)
         else:
             for i, node in enumerate(mpo.nodes):
                 if i == 0:
                     node_contract_list = [node, self.nodes[tidx[i]]]
                     node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 3)] + [node[3]]
-                    one = tn.Node(np.array([1]))
-                    tn.connect(node[2], one[0])
-                    node_contract_list.append(one)
+                    if last_dir is None:
+                        one = tn.Node(np.array([1]))
+                        tn.connect(node[2], one[0])
+                        node_contract_list.append(one)
+                    else:
+                        node_edge_list.append(node[2])
                     tn.connect(node[1], self.nodes[tidx[i]][0])
-                    node_list.append(tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list))
+                    new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
+                    if last_dir is not None:
+                        # flatten left edges, 0, 1, 2, 3, 4 -> 0, 2, 3, (1,4) -> 0, (1,4), 2, 3
+                        tn.flatten_edges([new_node[1], new_node[4]])
+                        reorder_list = [new_node[i] for i in [0,3,1,2]]
+                        new_node.reorder_edges(reorder_list)
+                    node_list.append(new_node)
                     edge_list.append(node_edge_list)
                 else:
                     tn.connect(node[1], self.nodes[tidx[i]][0])
@@ -227,7 +434,7 @@ class MPS(TensorNetwork):
                     # contract left_R, right_R, node
                     svd_node_edge_list = None
                     svd_node_list = [lR, rR, node]
-                    if i == mpo.n - 1:
+                    if i == mpo.n - 1 and last_dir is None:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[3], one[0])
                         svd_node_edge_list = [qr_left_edge, node[0], qr_right_edge]
@@ -237,11 +444,22 @@ class MPS(TensorNetwork):
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    U, s, Vh, _ = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim)
+                    if svd_node.tensor.shape[0] > 1:
+                        U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threthold_err, relative=True)
+                    else:
+                        U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threthold_err)
+                    
+                    # calc fidelity for normalization
+                    if len(s.tensor) != 0:
+                        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+                        trun_s_sq = np.dot(trun_s, trun_s)
+                        fidelity = s_sq / (s_sq + trun_s_sq)
+                        total_fidelity *= fidelity
+
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     r_edge_order = None
-                    if i == mpo.n - 1:
+                    if i == mpo.n - 1 and last_dir is None:
                         if dir == 2: # right
                             r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]]
                         else:
@@ -251,9 +469,19 @@ class MPS(TensorNetwork):
                             r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]] + [Vh[2]]
                         else:
                             r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]] + [Vh[2]]
-                    node_list.append(tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order))
+                    new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
+                    if i == mpo.n - 1 and last_dir is not None:
+                        if last_dir == 2: # right:
+                            tn.flatten_edges([new_node[2], new_node[3]])
+                        else:
+                            # TODO: unit test
+                            raise ValueError("not implemented yet")
+                    node_list.append(new_node)
+                
+                if is_return_history:
+                    tmp_mps_list = tn.replicate_nodes(node_list + self.nodes[len(node_list):])
+                    mps_list.append(tmp_mps_list)
                     
-
         for i in range(len(tidx)):
             self.nodes[tidx[i]] = node_list[i]
 
@@ -263,7 +491,10 @@ class MPS(TensorNetwork):
         if is_normalize:
             self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
         
-        return total_fidelity
+        if not is_return_history:
+            return total_fidelity
+        else:
+            return total_fidelity, mps_list
 
 
     def sample(self, seed=0):

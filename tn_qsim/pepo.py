@@ -2,6 +2,9 @@ import numpy as np
 import opt_einsum as oe
 import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
+from tn_qsim.mps import MPS
+from tn_qsim.mpo import MPO
+from tn_qsim.utils import from_tn_to_quimb
 
 class PEPO(TensorNetwork):
     """class of PEPDO
@@ -116,7 +119,7 @@ class PEPO(TensorNetwork):
         return node_list, output_edge_order
 
     
-    def calc_trace(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+    def calc_trace(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
         """contract PEPO and generate trace of full density operator
 
         Args:
@@ -128,16 +131,16 @@ class PEPO(TensorNetwork):
         Returns:
             np.array: tensor after contraction
         """
-
-        node_list, output_edge_order = self.prepare_trace()
         
-        if tree == None and path == None and self.trace_tree is not None:
-            tree = self.trace_tree
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_trace()
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
 
-        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)    
 
-
-    def find_trace_tree(self, algorithm=None, memory_limit=None, visualize=False):
+    def find_trace_tree(self, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction tree of the trace of the PEPO
 
         Args:
@@ -149,11 +152,14 @@ class PEPO(TensorNetwork):
             total_cost (int) : total temporal cost
             max_sp_cost (int) : max spatial cost
         """
+
         node_list, output_edge_order = self.prepare_trace()
 
-        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        self.trace_tree = tree
-        return tree, total_cost, max_sp_cost
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+
+        tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
+
+        return tn, tree
 
     
     def prepare_pepo_trace(self, pepo):
@@ -175,7 +181,7 @@ class PEPO(TensorNetwork):
         return node_list, output_edge_order
 
     
-    def find_pepo_trace_tree(self, pepo, algorithm=None, memory_limit=None, visualize=False):
+    def find_pepo_trace_tree(self, pepo, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction tree of the pepo_trace of the PEPO
 
         Args:
@@ -190,12 +196,11 @@ class PEPO(TensorNetwork):
         """
 
         node_list, output_edge_order = self.prepare_pepo_trace(pepo)
-        tree, total_cost, max_sp_cost = self.find_contract_tree(node_list, output_edge_order, algorithm, memory_limit, visualize=visualize)
-        self.pepo_trace_tree = tree
-        return tree, total_cost, max_sp_cost
+        tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
+        return self.find_contract_tree_by_quimb(tn, output_inds=output_inds, algorithm=algorithm, seq=seq, visualize=visualize)
 
 
-    def calc_pepo_trace(self, pepo, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
+    def calc_pepo_trace(self, pepo, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
         """calc product with pepo and trace out full density operator
 
         Args:
@@ -208,12 +213,55 @@ class PEPO(TensorNetwork):
             np.array: tensor after contraction
         """
 
-        node_list, output_edge_order = self.prepare_pepo_trace(pepo)
-        if tree == None and path == None and self.pepo_trace_tree is not None:
-            tree = self.pepo_trace_tree
+        output_inds = None
+        if tn is None:
+            node_list, output_edge_order = self.prepare_pepo_trace(pepo)
+            tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
         
-        return self.contract_tree(node_list, output_edge_order, algorithm, memory_limit, tree, path, visualize=visualize)
+        return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
     
+    def calc_pepo_trace_by_BMPS(self, pepo, truncate_dim=None, threthold=None):
+        # contract inner and physical dim
+        peps_tensors = []
+        for idx in range(self.n):
+            shape = self.nodes[idx].tensor.shape
+            tmp = oe.contract("afbcde,afBCDE->bBcCdDeE",self.nodes[idx].tensor, pepo.nodes[idx].tensor)
+            tmp = tmp.reshape(shape[2]**2, shape[3]**2, shape[4]**2, shape[5]**2)
+            peps_tensors.append(tmp)
+        
+        # suppose the dimension of down below (except for left or right edges) is 1
+        mps_tensors = []
+        for w in range(self.width):
+            tensor = peps_tensors[(self.height-1)*self.width+w]
+            shape = tensor.shape
+            if w == 0:
+                mps_tensors.append(tensor.reshape(shape[0],shape[1],shape[2]*shape[3]).transpose(0,2,1))
+            elif w == self.width-1:
+                mps_tensors.append(tensor.reshape(shape[0],shape[1]*shape[2],shape[3]).transpose(0,2,1))
+            else:
+                mps_tensors.append(tensor.reshape(shape[0],shape[1],shape[3]).transpose(0,2,1))
+
+        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threthold_err=1.0-threthold)
+        mps.canonicalization()
+
+        total_fid = 1.0
+        mps_tensors_list = [mps.tensors]
+        # boundary MPS
+        for h in range(self.height-2,-1,-1):
+            mpo_tensors = []
+            for w in range(self.width):
+                tensor = peps_tensors[h*self.width+w]
+                shape = tensor.shape
+                mpo_tensors.append(tensor.transpose(0,2,3,1))
+            mpo = MPO(mpo_tensors)
+            fid = mps.apply_MPO([i for i in range(self.width)], mpo, is_normalize=False)
+            #print("bmps mps-dim", mps.virtual_dims)
+            total_fid = total_fid * fid
+            print(f"fidelity: {fid}")
+            print(f"total fidelity: {total_fid}")
+            print(f"MPS virtual dims: {mps.virtual_dims}")
+
+        return mps.contract().flatten(), total_fid
 
     def find_optimal_truncation(self, trun_node_idx, trun_edge_idx, truncate_dim, trials=10, algorithm=None, memory_limit=None, visualize=False):
         """truncate the specified index using FET method
