@@ -2110,8 +2110,11 @@ class PEPS(TensorNetwork):
         tensorA_nodes = connect_full_env(tensorA_nodes, env_tensors)
         tensorB_nodes = connect_full_env(tensorB_nodes, env_tensors)"""
 
+        tensorA_before = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
+        print(tensorA_before)
+
         # fix gauge
-        """def create_gaugeX(h, w):
+        def create_gaugeX(h, w):
             tensor_shape = tensorA_nodes[h*area_width+w].tensor.shape
             tensor_dim = np.prod(tensor_shape[1:])
             
@@ -2141,21 +2144,59 @@ class PEPS(TensorNetwork):
         for h in range(area_height):
             R = create_gauge_tensor(h, 0, 3)
             left_gauge_tensors.append(R)
+            Rinv = np.linalg.pinv(R)
+            print("left", np.dot(R, Rinv))
+            pos = 2*area_height*area_width+4+h
+            tensorA_nodes[pos].tensor = oe.contract("abcd,cC,dD->abCD",tensorA_nodes[pos].tensor,Rinv,Rinv.conj())
+            #tensorB_nodes[pos].tensor = oe.contract("abcd,dD->abcD",tensorB_nodes[pos].tensor,Rinv.conj())
+            pos = h*area_width
+            tensorA_nodes[pos].tensor = oe.contract("abcde,Ee->abcdE",tensorA_nodes[pos].tensor, R)
+            tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Ee->abcdE",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
         # right
+        right_gauge_tensors = []
         for h in range(area_height):
             R = create_gauge_tensor(h, area_width-1, 1)
-            print(R.shape)
+            right_gauge_tensors.append(R)
+            Rinv = np.linalg.pinv(R)
+            print("right", np.dot(R, Rinv))
+            pos = 2*area_height*area_width+4+area_height+h
+            tensorA_nodes[pos].tensor = oe.contract("abcd,cC,dD->abCD",tensorA_nodes[pos].tensor,Rinv,Rinv.conj())
+            tensorB_nodes[pos].tensor = oe.contract("abcd,dD->abcD",tensorB_nodes[pos].tensor,Rinv.conj())
+            pos = (h+1)*area_width-1
+            tensorA_nodes[pos].tensor = oe.contract("abcde,Cc->abCde",tensorA_nodes[pos].tensor, R)
+            tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Cc->abCde",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
         # top
+        top_gauge_tensors = []
         for w in range(area_width):
             R = create_gauge_tensor(0, w, 0)
-            print(R.shape)
+            top_gauge_tensors.append(R)
+            Rinv = np.linalg.pinv(R)
+            print("top", np.dot(R, Rinv))
+            pos = 2*area_height*area_width+4+2*area_height+w
+            tensorA_nodes[pos].tensor = oe.contract("abcd,cC,dD->abCD",tensorA_nodes[pos].tensor,Rinv,Rinv.conj())
+            tensorB_nodes[pos].tensor = oe.contract("abcd,dD->abcD",tensorB_nodes[pos].tensor,Rinv.conj())
+            pos = w
+            tensorA_nodes[pos].tensor = oe.contract("abcde,Bb->aBcde",tensorA_nodes[pos].tensor, R)
+            tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Bb->aBcde",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
         # down
+        down_gauge_tensors = []
         for w in range(area_width):
-            R = create_gauge_tensor(area_height-1, w, 0)
-            print(R.shape)
-        
-        exit()"""
+            R = create_gauge_tensor(area_height-1, w, 2)
+            down_gauge_tensors.append(R)
+            Rinv = np.linalg.pinv(R)
+            print("down", np.dot(R, Rinv))
+            pos = 2*area_height*area_width+4+2*area_height+area_width+w
+            tensorA_nodes[pos].tensor = oe.contract("abcd,cC,dD->abCD",tensorA_nodes[pos].tensor,Rinv,Rinv.conj())
+            tensorB_nodes[pos].tensor = oe.contract("abcd,dD->abcD",tensorB_nodes[pos].tensor,Rinv.conj())
+            pos = (area_height-1)*area_width+w
+            tensorA_nodes[pos].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos].tensor, R)
+            tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
 
+        tensorA_after = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
+        print(tensorA_after)
+
+        print("tensorA before and after:", np.linalg.norm(tensorA_before - tensorA_after))
+    
         state_before = self.contract().flatten()
         state_before /= np.linalg.norm(state_before)
 
@@ -2208,11 +2249,37 @@ class PEPS(TensorNetwork):
                     tensorA_nodes[h*area_width+w+area_num].tensor = newT.conj()
                     tensorB_nodes[h*area_width+w+area_num].tensor = newT.conj()
 
-            for h in range(area_height):
-                for w in range(area_width):
-                    self.nodes[(h+top_idx)*self.width+(w+left_idx)].tensor = tensorA_nodes[h*area_width+w].tensor
-
             if iter == iters - 1:
+                # fix gauge
+                # left
+                for h in range(area_height):
+                    R = left_gauge_tensors[h]
+                    pos = h*area_width
+                    tensorA_nodes[pos].tensor = oe.contract("abcde,Ee->abcdE",tensorA_nodes[pos].tensor, R)
+                    tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Ee->abcdE",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
+                # right
+                for h in range(area_height):
+                    R = right_gauge_tensors[h]
+                    pos = (h+1)*area_width-1
+                    tensorA_nodes[pos].tensor = oe.contract("abcde,Cc->abCde",tensorA_nodes[pos].tensor, R)
+                    tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Cc->abCde",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
+                # top
+                for w in range(area_width):
+                    R = top_gauge_tensors[w]
+                    pos = w
+                    tensorA_nodes[pos].tensor = oe.contract("abcde,Bb->aBcde",tensorA_nodes[pos].tensor, R)
+                    tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Bb->aBcde",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
+                # down
+                for w in range(area_width):
+                    R = down_gauge_tensors[w]
+                    pos = (area_height-1)*area_width+w
+                    tensorA_nodes[pos].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos].tensor, R)
+                    tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
+
+                for h in range(area_height):
+                    for w in range(area_width):
+                        self.nodes[(h+top_idx)*self.width+(w+left_idx)].tensor = tensorA_nodes[h*area_width+w].tensor
+
                 state_after = self.contract().flatten()
                 state_after /= np.linalg.norm(state_after)
                 fidelity = np.dot(state_before, state_after)
