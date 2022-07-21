@@ -2042,26 +2042,11 @@ class PEPS(TensorNetwork):
         for idx in range(area_num):
             tn.connect(tensorB_nodes[idx][0], tensorB_nodes[idx+area_num][0])
 
-        # connect full env
-        # left1, left2, right1, right2, top1, top2, down1, down2, (its conj ...)
-        # env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
-        
+        # calc nodes of full env
         env_nodes, env_output_edges = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
         # split_edgesした時にaxis namesがバグるのを仕方なく修正
         for node in env_nodes:
             node.axis_names = [f"{i}" for i in range(len(node.tensor.shape))]
-        """env_tensor = tn.contractors.auto(env_nodes, env_output_edges).tensor
-        print(env_tensor.shape)
-        env_tensor = env_tensor.reshape(8, 8)
-        eig, w = np.linalg.eig(env_tensor)
-        print(eig)"""
-        
-        """true_env_tensors = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, 1.0, visualize=False)
-
-        env_norm = np.linalg.norm(env_tensors.flatten() - true_env_tensors.flatten())
-        if env_norm > 1e-8:
-            print(f"bmps threshold {bmps_threshold}, environment 2norm: {env_norm}")"""
-
 
         def connect_full_env(node_list, env_nodes):
             env = tn.replicate_nodes(env_nodes)
@@ -2086,35 +2071,11 @@ class PEPS(TensorNetwork):
         tensorA_nodes = connect_full_env(tensorA_nodes, env_nodes)
         tensorB_nodes = connect_full_env(tensorB_nodes, env_nodes)
 
-        """def connect_full_env(node_list, env_tensors):
-            env = tn.Node(env_tensors)
-            edge_num = len(env_tensors.shape) // 2
-
-            # left, right, top, down
-            for h in range(area_height):
-                tn.connect(env[0+h], node_list[area_width*h][4])
-                tn.connect(env[edge_num+h], node_list[area_width*h+area_num][4])
-            for h in range(area_height):
-                tn.connect(env[area_height+h], node_list[area_width*h+area_width-1][2])
-                tn.connect(env[area_height+edge_num+h], node_list[area_width*h+area_width-1+area_num][2])
-
-            for w in range(area_width):
-                tn.connect(env[2*area_height+w], node_list[w][1])
-                tn.connect(env[2*area_height+edge_num+w], node_list[w+area_num][1])
-                tn.connect(env[2*area_height+area_width+w], node_list[(area_height-1)*area_width+w][3])
-                tn.connect(env[2*area_height+area_width+edge_num+w], node_list[(area_height-1)*area_width+w+area_num][3])
-            
-            node_list.append(env)
-            return node_list
-        
-        tensorA_nodes = connect_full_env(tensorA_nodes, env_tensors)
-        tensorB_nodes = connect_full_env(tensorB_nodes, env_tensors)"""
-
         tensorA_before = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
         print(tensorA_before)
 
         # fix gauge
-        def create_gaugeX(h, w):
+        """def create_gaugeX(h, w):
             tensor_shape = tensorA_nodes[h*area_width+w].tensor.shape
             tensor_dim = np.prod(tensor_shape[1:])
             
@@ -2190,7 +2151,7 @@ class PEPS(TensorNetwork):
             tensorB_nodes[pos].tensor = oe.contract("abcd,dD->abcD",tensorB_nodes[pos].tensor,Rinv.conj())
             pos = (area_height-1)*area_width+w
             tensorA_nodes[pos].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos].tensor, R)
-            tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
+            tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())"""
 
         tensorA_after = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
         print(tensorA_after)
@@ -2251,7 +2212,7 @@ class PEPS(TensorNetwork):
 
             if iter == iters - 1:
                 # fix gauge
-                # left
+                """# left
                 for h in range(area_height):
                     R = left_gauge_tensors[h]
                     pos = h*area_width
@@ -2274,7 +2235,7 @@ class PEPS(TensorNetwork):
                     R = down_gauge_tensors[w]
                     pos = (area_height-1)*area_width+w
                     tensorA_nodes[pos].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos].tensor, R)
-                    tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())
+                    tensorA_nodes[pos+area_width*area_height].tensor = oe.contract("abcde,Dd->abcDe",tensorA_nodes[pos+area_width*area_height].tensor, R.conj())"""
 
                 for h in range(area_height):
                     for w in range(area_width):
