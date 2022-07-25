@@ -2105,6 +2105,10 @@ class PEPS(TensorNetwork):
                 dim = shape[0] * shape[1] * shape[2] * shape[3] * shape[4]
                 new_nodes[h*area_width+w].tensor = np.random.normal(scale=1/np.sqrt(dim),size=shape).astype(np.complex128) + 1j*np.random.normal(scale=1/np.sqrt(dim),size=shape).astype(np.complex128)
 
+        # norm of initial guess
+        for idx in range(area_num):
+            print(f"idx{idx} norm of initial tensor:", np.linalg.norm(new_nodes[idx].flatten()))
+
         # define tensor A
         tensorA_nodes = tn.replicate_nodes(new_nodes) + tn.replicate_nodes(new_nodes)
         for idx in range(area_num, 2 * area_num):
@@ -2139,6 +2143,7 @@ class PEPS(TensorNetwork):
 
         center_tensor = tn.contractors.auto(center_nodes, center_edges).tensor
         print("center tensor in PEPS:", center_tensor.flatten())
+        print("norm of center tensor:", np.linalg.norm(center_tensor.flatten()))
         # calc nodes of full env
         env_nodes, env_output_edges = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
         # split_edgesした時にaxis namesがバグるのを仕方なく修正
@@ -2213,9 +2218,18 @@ class PEPS(TensorNetwork):
 
         updated_arrays, max_condition_num, success_ALS = self.calc_full_ALS(left_idx, right_idx, top_idx, down_idx, truncate_dim, threshold, bmps_threshold, iters, try_fix_gauge)
 
+        """state_after = self.contract().flatten()
+        state_after /= np.linalg.norm(state_after)
+        fidelity = np.dot(state_before.conj(), state_after)
+        fidelity = fidelity * fidelity.conj()
+        print(f"true fidelity after ALS: {fidelity.real}")"""
+
         if not success_ALS:
-            print("update error happened")
-            return None, max_condition_num
+            print("ALS update error happened")
+            updated_arrays, fid = self.calc_full_GD(updated_arrays, left_idx, right_idx, top_idx, down_idx, truncate_dim, threshold, bmps_threshold, iters=100)
+            if fid > 1.0-threshold:
+                print("GD update also failed")
+                return None, max_condition_num
 
         for h in range(area_height):
             for w in range(area_width):
@@ -2225,7 +2239,7 @@ class PEPS(TensorNetwork):
         state_after /= np.linalg.norm(state_after)
         fidelity = np.dot(state_before.conj(), state_after)
         fidelity = fidelity * fidelity.conj()
-        print(f"true fidelity after ALS: {fidelity.real}")
+        print(f"true fidelity after ALS and GD: {fidelity.real}")
 
         if fidelity < threshold:
             print("warning!! strange error happened")
@@ -2240,7 +2254,7 @@ class PEPS(TensorNetwork):
         return fidelity, max_condition_num
 
 
-    def calc_full_ALS(self, left_idx, right_idx, top_idx, down_idx, als_truncate_dim, threshold=1e-8, bmps_threshold=None, iters=10, try_fix_gauge=False):
+    def calc_full_ALS(self, left_idx, right_idx, top_idx, down_idx, als_truncate_dim, threshold=1.0-1e-8, bmps_threshold=None, iters=10, try_fix_gauge=False):
         """update tensor by ALS using full environment
 
         Args:
@@ -2363,9 +2377,6 @@ class PEPS(TensorNetwork):
                     contract_node_list.pop(h*area_width+w+area_num)
                     contract_node_list.pop(h*area_width+w)
 
-                    #tmp = tn.contractors.auto(contract_node_list, ignore_edge_order=True).tensor
-                    #print(tmp.shape)
-
                     tensorA = tn.contractors.auto(contract_node_list, output_edge_order=output_edge_orderA).tensor.reshape(tensor_dim, -1)
 
                     contract_node_list = tn.replicate_nodes(tensorB_nodes)
@@ -2383,7 +2394,64 @@ class PEPS(TensorNetwork):
                     tensorA_nodes[h*area_width+w].tensor = newT
                     tensorA_nodes[h*area_width+w+area_num].tensor = newT.conj()
                     tensorB_nodes[h*area_width+w+area_num].tensor = newT.conj()
+                    #print(f"newT at iter{iter} h{h} w{w}: {np.linalg.norm(newT.flatten())}")
 
+            # reguralize
+
+            def calc_area_singularity():
+                sing = 1.0
+                for idx in range(area_num):
+                    sing *= np.linalg.norm(tensorA_nodes[idx].tensor)
+                return sing
+
+            sing = calc_area_singularity()
+            trial = 0
+            max_trial = 10
+            while trial < max_trial:
+                # vertical bond
+                for h in range(area_height - 1):
+                    for w in range(area_width):
+                        tensorup = tensorA_nodes[h*area_width+w].tensor
+                        shapeup = tensorup.shape
+                        tensordown = tensorA_nodes[(h+1)*area_width+w].tensor
+                        shapedown = tensordown.shape
+                        tmp = oe.contract("abcde,AdCDE->abceACDE", tensorup, tensordown).reshape(np.prod(shapeup[0:3]+shapeup[4:5]), -1)
+                        U, s, Vh = np.linalg.svd(tmp, full_matrices=False)
+                        sdim = min(shapeup[3], len(s))
+                        s = s[:sdim]
+                        U = np.dot(U[:,:sdim], np.diag(np.sqrt(s)))
+                        Vh = np.dot(np.diag(np.sqrt(s)), Vh[:sdim,:])
+                        tensorA_nodes[h*area_width+w].tensor = U.reshape(shapeup[0],shapeup[1],shapeup[2],shapeup[4],sdim).transpose(0,1,2,4,3)
+                        tensorA_nodes[(h+1)*area_width+w].tensor = Vh.reshape(sdim,shapedown[0],shapedown[2],shapedown[3],shapedown[4]).transpose(1,0,2,3,4)
+
+                # horizontal bond
+                for w in range(area_width - 1):
+                    for h in range(area_height):
+                        tensorleft = tensorA_nodes[h*area_width+w].tensor
+                        shapeleft = tensorleft.shape
+                        tensorright = tensorA_nodes[h*area_width+w+1].tensor
+                        shaperight = tensorright.shape
+                        tmp = oe.contract("abcde,ABCDc->abdeABCD", tensorleft, tensorright).reshape(-1, np.prod(shaperight[:4]))
+                        U, s, Vh = np.linalg.svd(tmp, full_matrices=False)
+                        sdim = min(shapeleft[2], len(s))
+                        s = s[:sdim]
+                        U = np.dot(U[:,:sdim], np.diag(np.sqrt(s)))
+                        Vh = np.dot(np.diag(np.sqrt(s)), Vh[:sdim,:])
+                        tensorA_nodes[h*area_width+w].tensor = U.reshape(shapeleft[0],shapeleft[1],shapeleft[3],shapeleft[4],sdim).transpose(0,1,4,2,3)
+                        tensorA_nodes[h*area_width+w+1].tensor = Vh.reshape(sdim,shaperight[0],shaperight[1],shaperight[2],shaperight[3]).transpose(1,2,3,4,0)
+
+                new_sing = calc_area_singularity()
+                #print(f"trial {trial}, singularity: {new_sing}")
+                if (sing - new_sing) / sing < 1e-5:
+                    break
+                trial += 1
+                sing = new_sing
+            
+            for h in range(area_height):
+                for w in range(area_width):
+                    tensorA_nodes[h*area_width+w+area_num].tensor = tensorA_nodes[h*area_width+w].tensor.conj()
+                    tensorB_nodes[h*area_width+w+area_num].tensor = tensorA_nodes[h*area_width+w].tensor.conj()
+            
             if iter % 10 == 9:
                 print(f"at iter{iter}")
                 tensorA_after = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
@@ -2392,7 +2460,7 @@ class PEPS(TensorNetwork):
                 tensorB_after = tn.contractors.auto(tn.replicate_nodes(tensorB_nodes), ignore_edge_order=True).tensor
                 print("tensorB", tensorB_after)
 
-                if np.abs(before_fidA - tensorA_after.real) > 1e-10 or np.abs(before_fidB - tensorB_after.real) > 1e-10:
+                if np.abs(before_fidA - tensorA_after.real) > (1-threshold) / 100 or np.abs(before_fidB - tensorB_after.real) > (1-threshold) / 100:
                     # still space to improve
                     before_fidA = tensorA_after.real
                     before_fidB = tensorB_after.real
@@ -2447,10 +2515,11 @@ class PEPS(TensorNetwork):
         return arrays, max_condition_num, success_update
 
 
-    def calc_full_GD(self, left_idx, right_idx, top_idx, down_idx, gd_truncate_dim, threshold=1e-8, bmps_threshold=1.0, iters=10):
+    def calc_full_GD(self, initial_arrays, left_idx, right_idx, top_idx, down_idx, gd_truncate_dim, threshold=1.0-1e-8, bmps_threshold=1.0, iters=10):
         """update tensor by Gradient Descent with automatic differentiation using full environment
 
         Args:
+            initial_arrays (list of ndarray) : the initial tensors of the updating area
             left_idx, right_idx, top_idx, down_idx (int) : the updating area [left, right], [top, down]
         """
 
@@ -2462,6 +2531,9 @@ class PEPS(TensorNetwork):
 
         original_params = []
         for idx in range(area_num):
+            tensorA_nodes[idx].tensor = initial_arrays[idx]
+            tensorA_nodes[idx+area_num].tensor = initial_arrays[idx].conj()
+            tensorB_nodes[idx+area_num].tensor = initial_arrays[idx].conj()
             original_params.append(tensorA_nodes[idx].tensor)
 
         tnA, _ = from_tn_to_quimb(tensorA_nodes, [])
@@ -2497,7 +2569,7 @@ class PEPS(TensorNetwork):
             resA = contract_core_A_jit(arraysA)
             resB = contract_core_B_jit(arraysB)
 
-            return resA.real - 2*resB.real
+            return resA.real - 2*resB.real + 1.0
         
         res = loss(original_params)
 
@@ -2505,7 +2577,7 @@ class PEPS(TensorNetwork):
 
         params = original_params
 
-        optimizer = opt.Adam(lr=0.001)
+        optimizer = opt.Adam(lr=(1-threshold)/)
 
         for ep in range(iters):
             val, grad = value_and_grad_func(params)
@@ -2513,5 +2585,8 @@ class PEPS(TensorNetwork):
                 grad[idx] = grad[idx].conj()
             optimizer.update(params, grad)
             print("epoch:", ep, "loss:", val)
+            if val < (1-threshold) / 100.0:
+                break
 
-        exit()
+        arrays = [np.array(param) for param in params]
+        return arrays, val
