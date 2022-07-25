@@ -2130,20 +2130,17 @@ class PEPS(TensorNetwork):
             center_nodes[idx].tensor = center_nodes[idx].tensor.conj()
         for idx in range(area_num):
             tn.connect(center_nodes[idx][0], center_nodes[idx+area_num][0])
-        center_edges = [center_nodes[0][4], center_nodes[2][4]]
-        center_edges += [center_nodes[1][2], center_nodes[3][2]]
-        center_edges += [center_nodes[0][1], center_nodes[1][1]]
-        center_edges += [center_nodes[2][3], center_nodes[3][3]]
-        center_edges += [center_nodes[0+4][4], center_nodes[2+4][4]]
-        center_edges += [center_nodes[1+4][2], center_nodes[3+4][2]]
-        center_edges += [center_nodes[0+4][1], center_nodes[1+4][1]]
-        center_edges += [center_nodes[2+4][3], center_nodes[3+4][3]]
+
+        center_edges = [center_nodes[0][4], center_nodes[1][2], center_nodes[0][1], center_nodes[1][1], center_nodes[0][3], center_nodes[1][3]]
+        center_edges += [center_nodes[0+2][4], center_nodes[1+2][2], center_nodes[0+2][1], center_nodes[1+2][1], center_nodes[0+2][3], center_nodes[1+2][3]]
+
+        for i in range(len(center_nodes)):
+            print(f"idx{i}:", center_nodes[i].tensor)
 
         center_tensor = tn.contractors.auto(center_nodes, center_edges).tensor
-        print("center tensor:", center_tensor.reshape(2**6, -1))
-
+        print("center tensor in PEPS:", center_tensor.flatten())
         # calc nodes of full env
-        env_nodes, env_output_edges, left_state, right_state, top_state, down_state = self.calc_full_environment_debug(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
+        env_nodes, env_output_edges = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
         # split_edgesした時にaxis namesがバグるのを仕方なく修正
         for node in env_nodes:
             node.axis_names = [f"{i}" for i in range(len(node.tensor.shape))]
@@ -2178,13 +2175,26 @@ class PEPS(TensorNetwork):
         env_tensor = tn.contractors.auto(env_nodes, env_output_edges).tensor
         print("peps env tensor:", env_tensor.reshape(2**6, -1))
         
+<<<<<<< HEAD
         print("inner from env and center:", np.dot(center_tensor.flatten(), env_tensor.flatten()))
         
+=======
+        print("inner from env and center in peps:", np.dot(center_tensor.flatten(), env_tensor.flatten()))
+        
+        """env_flatten = env_tensor.flatten()
+        for i in range(len(env_flatten)):
+            env_flatten[i] = 0 if np.abs(env_flatten[i]) < 1e-20 else env_flatten[i]
+        print("env-flatten in peps", env_flatten)"""
+>>>>>>> 0cce015 (maybe conflict)
 
         if tensorC_after.real < 1-1e-8:
             print("error! inner product != 1")
 
+<<<<<<< HEAD
         return tensorA_nodes, tensorB_nodes, left_state, right_state, top_state, down_state
+=======
+        return tensorA_nodes, tensorB_nodes, env_tensor, center_tensor
+>>>>>>> 0cce015 (maybe conflict)
 
     def calc_full_update(self, left_idx, right_idx, top_idx, down_idx, truncate_dim, threshold=1.0-1e-8, bmps_threshold=1.0, iters=10, try_fix_gauge=False):
         """update tensor by combining ALS and GD using full environment
@@ -2216,6 +2226,10 @@ class PEPS(TensorNetwork):
         fidelity = np.dot(state_before.conj(), state_after)
         fidelity = fidelity * fidelity.conj()
         print(f"true fidelity after ALS: {fidelity.real}")
+
+        if fidelity < threshold:
+            print("warning!! strange error happened")
+            return -1.0, max_condition_num
 
         """if fidelity < threshold:
             print("truncation failed")
@@ -2332,6 +2346,9 @@ class PEPS(TensorNetwork):
         max_condition_num = 0.0
         success_update = False
 
+        before_fidA = 1.0
+        before_fidB = 1.0
+
         for iter in range(iters):
             for h in range(area_height):
                 for w in range(area_width):
@@ -2374,7 +2391,13 @@ class PEPS(TensorNetwork):
 
                 tensorB_after = tn.contractors.auto(tn.replicate_nodes(tensorB_nodes), ignore_edge_order=True).tensor
                 print("tensorB", tensorB_after)
-                
+
+                if np.abs(before_fidA - tensorA_after.real) > 1e-10 or np.abs(before_fidB - tensorB_after.real) > 1e-10:
+                    # still space to improve
+                    before_fidA = tensorA_after.real
+                    before_fidB = tensorB_after.real
+                    continue
+
                 if tensorA_after.imag < 1-threshold and np.abs(1-tensorA_after.real) < 1-threshold and np.abs(1-tensorB_after.real) < 1-threshold:
                     # finish optimization
                     # repair fix gauge
