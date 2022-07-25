@@ -8,6 +8,9 @@ from tn_qsim.general_tn import TensorNetwork
 from tn_qsim.utils import *
 import opt_einsum as oe
 import copy
+import jax
+import functools
+import tn_qsim.optimizer as opt
 
 class PEPS(TensorNetwork):
     """class of PEPS
@@ -1920,15 +1923,15 @@ class PEPS(TensorNetwork):
                         rbdim = mps.tensors[i].shape[2]
                         ans = oe.contract("abc,dce->adbe",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
                     else:
-                        lbdim = mps.tnsors[i].shape[1]
+                        lbdim = mps.tensors[i].shape[1]
                         rbdim = ans.shape[2]
                         ans = oe.contract("abc,deb->adec",ans,mps.tensors[i]).reshape(-1, lbdim, rbdim)
             return ans.reshape(ans.shape[0], -1)
 
         top_left = tn.Node(create_corner_tensor(mps_left, 0, top_idx))
         top_right = tn.Node(create_corner_tensor(mps_right, 0, top_idx))
-        down_left = tn.Node(create_corner_tensor(mps_left, down_idx+1, self.height))
-        down_right = tn.Node(create_corner_tensor(mps_right, down_idx+1, self.height))
+        down_left = tn.Node(create_corner_tensor(mps_left, self.height-1, down_idx))
+        down_right = tn.Node(create_corner_tensor(mps_right, self.height-1, down_idx))
 
         node_list = []
         output_edge_order = []
@@ -1984,13 +1987,12 @@ class PEPS(TensorNetwork):
 
         return node_list, split_output_edge_order + split_output_edge_order2
 
-    def calc_full_ALS(self, left_idx, right_idx, top_idx, down_idx, als_truncate_dim, threshold=1e-8, bmps_threshold=None, iters=10, try_fix_gauge=False):
-        """update tensor by ALS using simple environment
+    def __prepare_full_tensorAB(self, left_idx, right_idx, top_idx, down_idx, truncate_dim, bmps_threshold=None):
+        """prepare nodelist of tensorA and tensorB for full ALS and GD without gauge fixing
 
         Args:
             left_idx, right_idx, top_idx, down_idx (int) : the updating area [left, right], [top, down]
         """
-
         # initialize new tensor
         original_nodes = []
         for h in range(top_idx, down_idx+1):
@@ -2005,14 +2007,15 @@ class PEPS(TensorNetwork):
             for w in range(area_width):
                 shape = list(original_nodes[h*area_width+w].tensor.shape)
                 if w != 0:
-                    shape[4] = min(shape[4], als_truncate_dim)
+                    shape[4] = min(shape[4], truncate_dim)
                 if w != area_width-1:
-                    shape[2] = min(shape[2], als_truncate_dim)
+                    shape[2] = min(shape[2], truncate_dim)
                 if h != 0:
-                    shape[1] = min(shape[1], als_truncate_dim)
+                    shape[1] = min(shape[1], truncate_dim)
                 if h != area_height-1:
-                    shape[3] = min(shape[3], als_truncate_dim)
-                new_nodes[h*area_width+w].tensor = np.random.randn(*shape)
+                    shape[3] = min(shape[3], truncate_dim)
+                dim = shape[0] * shape[1] * shape[2] * shape[3] * shape[4]
+                new_nodes[h*area_width+w].tensor = np.random.normal(scale=1/np.sqrt(dim),size=shape).astype(np.complex128) + 1j*np.random.normal(scale=1/np.sqrt(dim),size=shape).astype(np.complex128)
 
         # define tensor A
         tensorA_nodes = tn.replicate_nodes(new_nodes) + tn.replicate_nodes(new_nodes)
@@ -2027,6 +2030,12 @@ class PEPS(TensorNetwork):
             tensorB_nodes[idx].tensor = tensorB_nodes[idx].tensor.conj()
         for idx in range(area_num):
             tn.connect(tensorB_nodes[idx][0], tensorB_nodes[idx+area_num][0])
+
+        tensorC_nodes = tn.replicate_nodes(original_nodes) + tn.replicate_nodes(original_nodes)
+        for idx in range(area_num, 2 * area_num):
+            tensorC_nodes[idx].tensor = tensorC_nodes[idx].tensor.conj()
+        for idx in range(area_num):
+            tn.connect(tensorC_nodes[idx][0], tensorC_nodes[idx+area_num][0])
 
         # calc nodes of full env
         env_nodes, env_output_edges = self.calc_full_environment(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
@@ -2056,11 +2065,181 @@ class PEPS(TensorNetwork):
         
         tensorA_nodes = connect_full_env(tensorA_nodes, env_nodes)
         tensorB_nodes = connect_full_env(tensorB_nodes, env_nodes)
+        tensorC_nodes = connect_full_env(tensorC_nodes, env_nodes)
+
+        tensorC_after = tn.contractors.auto(tn.replicate_nodes(tensorC_nodes), ignore_edge_order=True).tensor
+        print("original tensor contraction", tensorC_after)
+
+        if tensorC_after.real < 1-1e-8:
+            print("error! inner product != 1")
+
+        return tensorA_nodes, tensorB_nodes
+
+    def prepare_full_tensorAB(self, left_idx, right_idx, top_idx, down_idx, truncate_dim, bmps_threshold=None):
+        """prepare nodelist of tensorA and tensorB for full ALS and GD without gauge fixing
+
+        Args:
+            left_idx, right_idx, top_idx, down_idx (int) : the updating area [left, right], [top, down]
+        """
+        # initialize new tensor
+        original_nodes = []
+        for h in range(top_idx, down_idx+1):
+            original_nodes += self.nodes[h*self.width+left_idx:h*self.width+right_idx+1]
+        original_nodes = tn.replicate_nodes(original_nodes)
+        new_nodes = tn.replicate_nodes(original_nodes)
+        area_height = down_idx - top_idx + 1
+        area_width = right_idx - left_idx + 1
+        area_num = area_height * area_width
+
+        for h in range(area_height):
+            for w in range(area_width):
+                shape = list(original_nodes[h*area_width+w].tensor.shape)
+                if w != 0:
+                    shape[4] = min(shape[4], truncate_dim)
+                if w != area_width-1:
+                    shape[2] = min(shape[2], truncate_dim)
+                if h != 0:
+                    shape[1] = min(shape[1], truncate_dim)
+                if h != area_height-1:
+                    shape[3] = min(shape[3], truncate_dim)
+                dim = shape[0] * shape[1] * shape[2] * shape[3] * shape[4]
+                new_nodes[h*area_width+w].tensor = np.random.normal(scale=1/np.sqrt(dim),size=shape).astype(np.complex128) + 1j*np.random.normal(scale=1/np.sqrt(dim),size=shape).astype(np.complex128)
+
+        # define tensor A
+        tensorA_nodes = tn.replicate_nodes(new_nodes) + tn.replicate_nodes(new_nodes)
+        for idx in range(area_num, 2 * area_num):
+            tensorA_nodes[idx].tensor = tensorA_nodes[idx].tensor.conj()
+        for idx in range(area_num):
+            tn.connect(tensorA_nodes[idx][0], tensorA_nodes[idx+area_num][0])
+
+        # define tensor B
+        tensorB_nodes = tn.replicate_nodes(original_nodes) + tn.replicate_nodes(new_nodes)
+        for idx in range(area_num, 2 * area_num):
+            tensorB_nodes[idx].tensor = tensorB_nodes[idx].tensor.conj()
+        for idx in range(area_num):
+            tn.connect(tensorB_nodes[idx][0], tensorB_nodes[idx+area_num][0])
+
+        tensorC_nodes = tn.replicate_nodes(original_nodes) + tn.replicate_nodes(original_nodes)
+        for idx in range(area_num, 2 * area_num):
+            tensorC_nodes[idx].tensor = tensorC_nodes[idx].tensor.conj()
+        for idx in range(area_num):
+            tn.connect(tensorC_nodes[idx][0], tensorC_nodes[idx+area_num][0])
+
+        center_nodes = tn.replicate_nodes(original_nodes) + tn.replicate_nodes(original_nodes)
+        for idx in range(area_num, 2 * area_num):
+            center_nodes[idx].tensor = center_nodes[idx].tensor.conj()
+        for idx in range(area_num):
+            tn.connect(center_nodes[idx][0], center_nodes[idx+area_num][0])
+        center_edges = [center_nodes[0][4], center_nodes[2][4]]
+        center_edges += [center_nodes[1][2], center_nodes[3][2]]
+        center_edges += [center_nodes[0][1], center_nodes[1][1]]
+        center_edges += [center_nodes[2][3], center_nodes[3][3]]
+        center_edges += [center_nodes[0+4][4], center_nodes[2+4][4]]
+        center_edges += [center_nodes[1+4][2], center_nodes[3+4][2]]
+        center_edges += [center_nodes[0+4][1], center_nodes[1+4][1]]
+        center_edges += [center_nodes[2+4][3], center_nodes[3+4][3]]
+
+        center_tensor = tn.contractors.auto(center_nodes, center_edges).tensor
+        print("center tensor:", center_tensor.reshape(2**6, -1))
+
+        # calc nodes of full env
+        env_nodes, env_output_edges, left_state, right_state, top_state, down_state = self.calc_full_environment_debug(left_idx, right_idx, top_idx, down_idx, bmps_threshold, visualize=False)
+        # split_edgesした時にaxis namesがバグるのを仕方なく修正
+        for node in env_nodes:
+            node.axis_names = [f"{i}" for i in range(len(node.tensor.shape))]
+
+        def connect_full_env(node_list, env_nodes):
+            env = tn.replicate_nodes(env_nodes)
+
+            # left, right, top, down
+            for h in range(area_height):
+                tn.connect(env[h][2], node_list[area_width*h][4])
+                tn.connect(env[h][3], node_list[area_width*h+area_num][4])
+            for h in range(area_height):
+                tn.connect(env[area_height+h][2], node_list[area_width*h+area_width-1][2])
+                tn.connect(env[area_height+h][3], node_list[area_width*h+area_width-1+area_num][2])
+
+            for w in range(area_width):
+                tn.connect(env[2*area_height+w][2], node_list[w][1])
+                tn.connect(env[2*area_height+w][3], node_list[w+area_num][1])
+                tn.connect(env[2*area_height+area_width+w][2], node_list[(area_height-1)*area_width+w][3])
+                tn.connect(env[2*area_height+area_width+w][3], node_list[(area_height-1)*area_width+w+area_num][3])
+            
+            node_list += env
+            return node_list
+        
+        tensorA_nodes = connect_full_env(tensorA_nodes, env_nodes)
+        tensorB_nodes = connect_full_env(tensorB_nodes, env_nodes)
+        tensorC_nodes = connect_full_env(tensorC_nodes, env_nodes)
+
+        tensorC_after = tn.contractors.auto(tn.replicate_nodes(tensorC_nodes), ignore_edge_order=True).tensor
+        print("original tensor contraction", tensorC_after)
+
+        env_tensor = tn.contractors.auto(env_nodes, env_output_edges).tensor
+        print("peps env tensor:", env_tensor.reshape(2**6, -1))
+        
+        print("inner from env and center:", np.dot(center_tensor.flatten(), env_tensor.flatten()))
+        
+
+        if tensorC_after.real < 1-1e-8:
+            print("error! inner product != 1")
+
+        return tensorA_nodes, tensorB_nodes, left_state, right_state, top_state, down_state
+
+    def calc_full_update(self, left_idx, right_idx, top_idx, down_idx, truncate_dim, threshold=1.0-1e-8, bmps_threshold=1.0, iters=10, try_fix_gauge=False):
+        """update tensor by combining ALS and GD using full environment
+
+        Args:
+            left_idx, right_idx, top_idx, down_idx (int) : the updating area [left, right], [top, down]
+        """
+
+        area_height = down_idx - top_idx + 1
+        area_width = right_idx - left_idx + 1
+        area_num = area_height * area_width
+
+        state_before = self.contract().flatten()
+        state_before /= np.linalg.norm(state_before)
+        original_tensors = self.tensors
+
+        updated_arrays, max_condition_num, success_ALS = self.calc_full_ALS(left_idx, right_idx, top_idx, down_idx, truncate_dim, threshold, bmps_threshold, iters, try_fix_gauge)
+
+        if not success_ALS:
+            print("update error happened")
+            return None, max_condition_num
+
+        for h in range(area_height):
+            for w in range(area_width):
+                self.nodes[(h+top_idx)*self.width+(w+left_idx)].tensor = updated_arrays[h*area_width+w]
+
+        state_after = self.contract().flatten()
+        state_after /= np.linalg.norm(state_after)
+        fidelity = np.dot(state_before.conj(), state_after)
+        fidelity = fidelity * fidelity.conj()
+        print(f"true fidelity after ALS: {fidelity.real}")
+
+        """if fidelity < threshold:
+            print("truncation failed")
+            for i in range(self.height * self.width):
+                self.nodes[i].tensor = original_tensors[i]
+            return None, None"""
+        
+        return fidelity, max_condition_num
+
+
+    def calc_full_ALS(self, left_idx, right_idx, top_idx, down_idx, als_truncate_dim, threshold=1e-8, bmps_threshold=None, iters=10, try_fix_gauge=False):
+        """update tensor by ALS using full environment
+
+        Args:
+            left_idx, right_idx, top_idx, down_idx (int) : the updating area [left, right], [top, down]
+        """
+
+        area_height = down_idx - top_idx + 1
+        area_width = right_idx - left_idx + 1
+        area_num = area_height * area_width
+
+        tensorA_nodes, tensorB_nodes = self.__prepare_full_tensorAB(left_idx, right_idx, top_idx, down_idx, als_truncate_dim, bmps_threshold)
 
         if try_fix_gauge:
-            tensorA_before = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
-            print("tensorA_before:", tensorA_before)
-
             # fix gauge
             def create_gaugeX(h, w):
                 tensor_shape = tensorA_nodes[h*area_width+w].tensor.shape
@@ -2092,8 +2271,7 @@ class PEPS(TensorNetwork):
             for h in range(area_height):
                 R = create_gauge_tensor(h, 0, 3)
                 Rinv = np.linalg.pinv(R)
-                left_gauge_tensors.append(Rinv)
-                print("R shape:", R.shape, "Rinv shape:", Rinv.shape)
+                left_gauge_tensors.append((R, Rinv))
                 #print("left", np.dot(R, Rinv))
                 assert np.linalg.norm(np.dot(R, Rinv) - np.eye(R.shape[0])) < 1e-8, "inv of left gauge tensor is not well defined"
                 pos = 2*area_height*area_width+h
@@ -2109,8 +2287,7 @@ class PEPS(TensorNetwork):
             for h in range(area_height):
                 R = create_gauge_tensor(h, area_width-1, 1)
                 Rinv = np.linalg.pinv(R)
-                right_gauge_tensors.append(Rinv)
-                print("R shape:", R.shape, "Rinv shape:", Rinv.shape)
+                right_gauge_tensors.append((R, Rinv))
                 assert np.linalg.norm(np.dot(R, Rinv) - np.eye(R.shape[0])) < 1e-8, "inv of right gauge tensor is not well defined"
                 pos = 2*area_height*area_width+area_height+h
                 tensorA_nodes[pos].tensor = oe.contract("abcd,Cc,Dd->abCD",tensorA_nodes[pos].tensor,Rinv,Rinv.conj())
@@ -2125,8 +2302,7 @@ class PEPS(TensorNetwork):
             for w in range(area_width):
                 R = create_gauge_tensor(0, w, 0)
                 Rinv = np.linalg.pinv(R)
-                top_gauge_tensors.append(Rinv)
-                print("R shape:", R.shape, "Rinv shape:", Rinv.shape)
+                top_gauge_tensors.append((R, Rinv))
                 assert np.linalg.norm(np.dot(R, Rinv) - np.eye(R.shape[0])) < 1e-8, "inv of top gauge tensor is not well defined"
                 pos = 2*area_height*area_width+2*area_height+w
                 tensorA_nodes[pos].tensor = oe.contract("abcd,Cc,Dd->abCD",tensorA_nodes[pos].tensor,Rinv,Rinv.conj())
@@ -2141,8 +2317,7 @@ class PEPS(TensorNetwork):
             for w in range(area_width):
                 R = create_gauge_tensor(area_height-1, w, 2)
                 Rinv = np.linalg.pinv(R)
-                down_gauge_tensors.append(Rinv)
-                print("R shape:", R.shape, "Rinv shape:", Rinv.shape)
+                down_gauge_tensors.append((R, Rinv))
                 assert np.linalg.norm(np.dot(R, Rinv) - np.eye(R.shape[0])) < 1e-8, "inv of down gauge tensor is not well defined"
                 pos = 2*area_height*area_width+2*area_height+area_width+w
                 tensorA_nodes[pos].tensor = oe.contract("abcd,Cc,Dd->abCD",tensorA_nodes[pos].tensor,Rinv,Rinv.conj())
@@ -2153,30 +2328,9 @@ class PEPS(TensorNetwork):
                 tensorB_nodes[pos].tensor = oe.contract("abcde,dD->abcDe",tensorB_nodes[pos].tensor, R)
                 tensorB_nodes[pos+area_num].tensor = oe.contract("abcde,dD->abcDe",tensorB_nodes[pos+area_num].tensor, R.conj())
 
-            tensorA_after = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
-            print("tensorA_after", tensorA_after)
-
-            print("tensorA before and after:", np.linalg.norm(tensorA_before - tensorA_after))
-
-            tensorB_after = tn.contractors.auto(tn.replicate_nodes(tensorB_nodes), ignore_edge_order=True).tensor
-            print("tensorB_before", tensorB_after)
-    
-        state_before = self.contract().flatten()
-        state_before /= np.linalg.norm(state_before)
-
         original_tensors = self.tensors
-
-        for h in range(area_height):
-            for w in range(area_width):
-                self.nodes[(h+top_idx)*self.width+(w+left_idx)].tensor = tensorA_nodes[h*area_width+w].tensor
-                
-        state_after = self.contract().flatten()
-        state_after /= np.linalg.norm(state_after)
-        past_fid = np.dot(state_before, state_after)
-        print("initial fidelity:", past_fid)
-        fidelity = 0.0
-
         max_condition_num = 0.0
+        success_update = False
 
         for iter in range(iters):
             for h in range(area_height):
@@ -2213,61 +2367,128 @@ class PEPS(TensorNetwork):
                     tensorA_nodes[h*area_width+w+area_num].tensor = newT.conj()
                     tensorB_nodes[h*area_width+w+area_num].tensor = newT.conj()
 
-            if iter == iters - 1:
-                # fix gauge
-                if try_fix_gauge:
-                    # left
-                    for h in range(area_height):
-                        Rinv = left_gauge_tensors[h]
-                        pos = h*area_width
-                        before_shape = tensorA_nodes[pos].tensor.shape
-                        tensorA_nodes[pos].tensor = oe.contract("abcde,eE->abcdE",tensorA_nodes[pos].tensor, Rinv)
-                        tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,eE->abcdE",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
-                    # right
-                    for h in range(area_height):
-                        Rinv = right_gauge_tensors[h]
-                        pos = (h+1)*area_width-1
-                        tensorA_nodes[pos].tensor = oe.contract("abcde,cC->abCde",tensorA_nodes[pos].tensor, Rinv)
-                        tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,cC->abCde",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
-                    # top
-                    for w in range(area_width):
-                        Rinv = top_gauge_tensors[w]
-                        pos = w
-                        tensorA_nodes[pos].tensor = oe.contract("abcde,bB->aBcde",tensorA_nodes[pos].tensor, Rinv)
-                        tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,bB->aBcde",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
-                    # down
-                    for w in range(area_width):
-                        Rinv = down_gauge_tensors[w]
-                        pos = (area_height-1)*area_width+w
-                        tensorA_nodes[pos].tensor = oe.contract("abcde,dD->abcDe",tensorA_nodes[pos].tensor, Rinv)
-                        tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,dD->abcDe",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
-
+            if iter % 10 == 9:
+                print(f"at iter{iter}")
+                tensorA_after = tn.contractors.auto(tn.replicate_nodes(tensorA_nodes), ignore_edge_order=True).tensor
+                print("tensorA", tensorA_after)
 
                 tensorB_after = tn.contractors.auto(tn.replicate_nodes(tensorB_nodes), ignore_edge_order=True).tensor
-                print("tensorB_after_optimization", tensorB_after)
+                print("tensorB", tensorB_after)
+                
+                if tensorA_after.imag < 1-threshold and np.abs(1-tensorA_after.real) < 1-threshold and np.abs(1-tensorB_after.real) < 1-threshold:
+                    # finish optimization
+                    # repair fix gauge
+                    if try_fix_gauge:
+                        # left
+                        for h in range(area_height):
+                            R, Rinv = left_gauge_tensors[h]
+                            pos = h*area_width
+                            tensorA_nodes[pos].tensor = oe.contract("abcde,eE->abcdE",tensorA_nodes[pos].tensor, Rinv)
+                            tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,eE->abcdE",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
+                            pos = 2*area_height*area_width+h
+                            tensorA_nodes[pos].tensor = oe.contract("abcd,Cc,Dd->abCD",tensorA_nodes[pos].tensor,R,R.conj())
+                        # right
+                        for h in range(area_height):
+                            R, Rinv = right_gauge_tensors[h]
+                            pos = (h+1)*area_width-1
+                            tensorA_nodes[pos].tensor = oe.contract("abcde,cC->abCde",tensorA_nodes[pos].tensor, Rinv)
+                            tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,cC->abCde",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
+                            pos = 2*area_height*area_width+area_height+h
+                            tensorA_nodes[pos].tensor = oe.contract("abcd,Cc,Dd->abCD",tensorA_nodes[pos].tensor,R,R.conj())
+                        # top
+                        for w in range(area_width):
+                            R, Rinv = top_gauge_tensors[w]
+                            pos = w
+                            tensorA_nodes[pos].tensor = oe.contract("abcde,bB->aBcde",tensorA_nodes[pos].tensor, Rinv)
+                            tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,bB->aBcde",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
+                            pos = 2*area_height*area_width+2*area_height+w
+                            tensorA_nodes[pos].tensor = oe.contract("abcd,Cc,Dd->abCD",tensorA_nodes[pos].tensor,R,R.conj())
+                        # down
+                        for w in range(area_width):
+                            R, Rinv = down_gauge_tensors[w]
+                            pos = (area_height-1)*area_width+w
+                            tensorA_nodes[pos].tensor = oe.contract("abcde,dD->abcDe",tensorA_nodes[pos].tensor, Rinv)
+                            tensorA_nodes[pos+area_num].tensor = oe.contract("abcde,dD->abcDe",tensorA_nodes[pos+area_num].tensor, Rinv.conj())
+                            pos = 2*area_height*area_width+2*area_height+area_width+w
+                            tensorA_nodes[pos].tensor = oe.contract("abcd,Cc,Dd->abCD",tensorA_nodes[pos].tensor,R,R.conj())
 
-                for h in range(area_height):
-                    for w in range(area_width):
-                        self.nodes[(h+top_idx)*self.width+(w+left_idx)].tensor = tensorA_nodes[h*area_width+w].tensor
+                    success_update = True
+                    break
+        
 
-                state_after = self.contract().flatten()
-                state_after /= np.linalg.norm(state_after)
-                fidelity = np.dot(state_before, state_after)
-                print("iter:", iter, "fidelity:", fidelity)
-                #if np.abs(fidelity - past_fid) < 1e-8:
-                #    print("no more improvement")
-                #    break
-                #past_fid = fidelity
-                break
-        
-        
+        arrays = [node.tensor for node in tensorA_nodes[:area_num]]
         print(f"max condition number : {max_condition_num}")
+        if not success_update:
+            print("tensor is not fully updated via ALS")
+
+        return arrays, max_condition_num, success_update
 
 
-        if fidelity < threshold:
-            print("truncation failed")
-            for i in range(self.height * self.width):
-                self.nodes[i].tensor = original_tensors[i]
-            return None, None
+    def calc_full_GD(self, left_idx, right_idx, top_idx, down_idx, gd_truncate_dim, threshold=1e-8, bmps_threshold=1.0, iters=10):
+        """update tensor by Gradient Descent with automatic differentiation using full environment
+
+        Args:
+            left_idx, right_idx, top_idx, down_idx (int) : the updating area [left, right], [top, down]
+        """
+
+        area_height = down_idx - top_idx + 1
+        area_width = right_idx - left_idx + 1
+        area_num = area_height * area_width
+
+        tensorA_nodes, tensorB_nodes = self.__prepare_full_tensorAB(left_idx, right_idx, top_idx, down_idx, gd_truncate_dim, bmps_threshold)
+
+        original_params = []
+        for idx in range(area_num):
+            original_params.append(tensorA_nodes[idx].tensor)
+
+        tnA, _ = from_tn_to_quimb(tensorA_nodes, [])
+        tnB, _ = from_tn_to_quimb(tensorB_nodes, [])
+
+        tnA, treeA = self.find_contract_tree_by_quimb(tnA, "", oe.paths.greedy, None)
+        tnB, treeB = self.find_contract_tree_by_quimb(tnB, "", oe.paths.greedy, None)
+
+        contract_core_A_jit = jax.jit(functools.partial(treeA.contract_core, backend="jax"))
+        contract_core_B_jit = jax.jit(functools.partial(treeB.contract_core, backend="jax"))
+
+        original_arraysA = [jax.numpy.array(tensor.data) for tensor in tnA.tensors]
+        original_arraysB = [jax.numpy.array(tensor.data) for tensor in tnB.tensors]
+
+        def loss(params):
+            arraysA, arraysB = [], [] # list of jax.numpy.array
+
+            for h in range(area_height):
+                for w in range(area_width):
+                    arraysA.append(params[h*area_width+w])
+            
+            for idx in range(area_num):
+                arraysB.append(original_arraysB[idx])
+
+            for idx in range(area_num, 2 * area_num):
+                arraysA.append(params[idx-area_num].conj())
+                arraysB.append(params[idx-area_num].conj())
+
+            for idx in range(2*area_num, len(original_arraysA)):
+                arraysA.append(original_arraysA[idx])
+                arraysB.append(original_arraysB[idx])
+
+            resA = contract_core_A_jit(arraysA)
+            resB = contract_core_B_jit(arraysB)
+
+            return resA.real - 2*resB.real
         
-        return fidelity, max_condition_num
+        res = loss(original_params)
+
+        value_and_grad_func = jax.value_and_grad(loss)
+
+        params = original_params
+
+        optimizer = opt.Adam(lr=0.001)
+
+        for ep in range(iters):
+            val, grad = value_and_grad_func(params)
+            for idx in range(len(grad)):
+                grad[idx] = grad[idx].conj()
+            optimizer.update(params, grad)
+            print("epoch:", ep, "loss:", val)
+
+        exit()
