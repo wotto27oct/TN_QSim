@@ -1111,7 +1111,7 @@ class PEPS(TensorNetwork):
                             U = None
                             break
                         for sd in range(10):
-                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
+                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, (1-threshold)/10, trials, visualize=visualize)
                             truncate_dim = cur_truncate_dim
                             if Fid > threshold:
                                 break
@@ -1120,6 +1120,7 @@ class PEPS(TensorNetwork):
                             
                 # if truncation is executed        
                 if U is not None:
+                    U = np.dot(U, S) / np.sqrt(trace)
                     if visualize:
                         Gamma = oe.contract("iIjJ,ip,qj,IP,QJ->pPqQ",Gamma,U,Vh,U.conj(),Vh.conj())
                         sigma = S
@@ -1129,7 +1130,6 @@ class PEPS(TensorNetwork):
                         sig = np.diag(sigma)
                         sig = sig / np.linalg.norm(sig)
                         print("WTG coef:", sig)
-                    U = np.dot(U, S) / np.sqrt(trace)
 
                     trun_node_idx = h*self.width+w
                     trun_edge_idx = 2
@@ -1201,29 +1201,6 @@ class PEPS(TensorNetwork):
             
             return Gamma, sigma, xinv, yinv
 
-        def execute_optimal_truncation(Gamma, simga):
-            U, S, Vh, Fid, trace = None, None, None, 1.0, 1.0
-            truncate_dim = None
-            if threshold is not None:
-                for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
-                    if cur_truncate_dim == Gamma.shape[0]:
-                        print("no truncation done")
-                        U = None
-                        break
-                    elif Gamma.shape[0] <= cur_truncate_dim:         
-                        print("truncate dim already satistfied")
-                        U = None
-                        break
-                    for sd in range(10):
-                        U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, precision=1-threshold, trials=trials, visualize=visualize)
-                        truncate_dim = cur_truncate_dim
-                        print(f"Fid {Fid} threshold {threshold}")
-                        if Fid > threshold:
-                            break
-                    if Fid > threshold:
-                        break
-            return U, S, Vh, Fid, trace, truncate_dim
-
         # vertical FET from top left
         # BMPS from top left
         mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
@@ -1256,7 +1233,7 @@ class PEPS(TensorNetwork):
                 if is_fix_gauge:
                     Gamma, sigma, xinv, yinv = fix_Gamma_gauge(Gamma)
 
-                U, S, Vh, Fid, trace, truncate_dim = execute_optimal_truncation(Gamma, sigma)
+                U, S, Vh, Fid, trace, truncate_dim = execute_optimal_truncation(Gamma, sigma, min_truncate_dim, max_truncate_dim, truncate_buff, threshold, trials, visualize)
                             
                 # if truncation is executed        
                 if U is not None:
@@ -1266,16 +1243,17 @@ class PEPS(TensorNetwork):
                         U = None
 
                 if U is not None:
+                    U = np.dot(U, S) / np.sqrt(trace)
                     if visualize:
                         Gamma = oe.contract("iIjJ,ip,qj,IP,QJ->pPqQ",Gamma,U,Vh,U.conj(),Vh.conj())
                         sigma = S
                         print("Gamma after optimal truncation", Gamma.reshape(Gamma.shape[0]**2, -1)[:max(5, Gamma.shape[0]),:max(5, Gamma.shape[1])])
+                        print("Fid from Gamma, S:", oe.contract("iIjJ,ij,IJ",Gamma,sigma,sigma))
                         print("is_WTG:", is_WTG(Gamma, sigma))
                         print("cycle entropy:", calc_cycle_entropy(Gamma, sigma))
                         sig = np.diag(sigma)
                         sig = sig / np.linalg.norm(sig)
                         print("WTG coef:", sig)
-                    U = np.dot(U, S) / np.sqrt(trace)
 
                     trun_node_idx = h*self.width+w
                     trun_edge_idx = 3
@@ -1338,7 +1316,7 @@ class PEPS(TensorNetwork):
                 if is_fix_gauge:
                     Gamma, sigma, xinv, yinv = fix_Gamma_gauge(Gamma)
 
-                U, S, Vh, Fid, trace, truncate_dim = execute_optimal_truncation(Gamma, sigma)
+                U, S, Vh, Fid, trace, truncate_dim = execute_optimal_truncation(Gamma, sigma, min_truncate_dim, max_truncate_dim, truncate_buff, threshold, trials, visualize)
                             
                 # if truncation is executed        
                 if U is not None:

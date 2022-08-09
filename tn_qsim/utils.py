@@ -2,6 +2,8 @@ import opt_einsum as oe
 import tensornetwork as tn
 import quimb.tensor as qtn
 import numpy as np
+import jax
+import tn_qsim.optimizer as opt
 
 def from_nodes_to_str(node_list, output_edge_order):
     input_sets = [set(node.edges) for node in node_list]
@@ -236,7 +238,9 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
     try_idx = 0
 
     init_fluct = 10
-    init_trial = 20
+    init_trial = 10
+
+    fluct_table = [-2 for _ in range(10)]
 
     while (try_idx < trials):
         ## step1
@@ -246,7 +250,7 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
 
         if try_idx < init_fluct:
-            B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
+            B += 10**fluct_table[try_idx] * np.diag(np.random.uniform(size=B.shape[0]))
 
         Rmax = np.dot(np.linalg.pinv(B), P)
         trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
@@ -273,7 +277,7 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
 
         if try_idx < init_fluct:
-            B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
+            B += 10**fluct_table[try_idx] * np.diag(np.random.uniform(size=B.shape[0]))
 
         Rmax = np.dot(np.linalg.pinv(B), P)
         trace = np.dot(Rmax.conj(), np.dot(B, Rmax))
@@ -296,3 +300,80 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         try_idx += 1
 
     return U, S, Vh, past_fid, past_trace
+
+def execute_optimal_truncation(Gamma, sigma, min_truncate_dim, max_truncate_dim, truncate_buff, threshold, trials, visualize=False):
+    U, S, Vh, Fid, trace = None, None, None, 1.0, 1.0
+    truncate_dim = None
+    if threshold is not None:
+        for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
+            if cur_truncate_dim == Gamma.shape[0]:
+                print("no truncation done")
+                U = None
+                break
+            elif Gamma.shape[0] <= cur_truncate_dim:         
+                print("truncate dim already satistfied")
+                U = None
+                break
+            for sd in range(10):
+                U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, precision=1-threshold, trials=trials, visualize=visualize)
+                truncate_dim = cur_truncate_dim
+                print(f"Fid {Fid} threshold {threshold}")
+                if Fid > threshold:
+                    break
+                else:
+                    # try GD
+                    tmp = np.dot(U, np.dot(S, Vh))
+                    U, s, Vh = np.linalg.svd(tmp, full_matrices=False)
+                    U = U[:,:cur_truncate_dim]
+                    s = s[:cur_truncate_dim]
+                    Vh = Vh[:cur_truncate_dim]
+                    L = jax.numpy.array(np.dot(U, np.diag(np.sqrt(s))))
+                    R = jax.numpy.array(np.dot(np.diag(np.sqrt(s)), Vh))
+
+                    def loss(params):
+                        l1 = oe.contract("iIjJ,ik,kj,IJ",Gamma,params[0],params[1],sigma.conj(), backend="jax")
+                        l2 = oe.contract("iIjJ,ij,IK,KJ",Gamma,sigma,params[0].conj(),params[1].conj(), backend="jax")
+                        l3 = oe.contract("iIjJ,ik,kj,IK,KJ",Gamma,params[0],params[1],params[0].conj(),params[1].conj(), backend="jax")
+                        return jax.numpy.abs(1-(l1 * l2 / l3).real)
+
+                    params = [L, R]
+                    res = loss(params)
+                    print("initial loss:", res)
+                    value_and_grad_func = jax.value_and_grad(loss)
+
+                    # lr 対応表
+                    lr_table = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.1, 0.1, 0.01, 0.01, 0.01, 0.001, 0.001, 0.0001, 0.0001, 0.0001]
+                    lr_table = [10.0**((-i-16)//8) for i in range(20)]
+                    print(lr_table)
+                    flr = int(np.floor(np.log10(res)))
+                    optimizer = opt.Adam(lr=lr_table[-flr])
+                    print("flr:", -flr, "lr:", lr_table[-flr])
+
+                    past_val = 0.0
+                    for ep in range(1000):
+                        val, grad = value_and_grad_func(params)
+                        for idx in range(len(grad)):
+                            grad[idx] = grad[idx].conj()
+                        optimizer.update(params, grad)
+                        print("epoch:", ep, "loss:", val)
+                        if val < (1-threshold):
+                            break
+                        if np.abs(past_val - val) < 1e-17:
+                            break
+                        past_val = val
+                        if ep % 100 == 99:
+                            flr = int(np.floor(np.log10(val)))
+                            optimizer.lr = lr_table[-flr]
+                            print("lr:", lr_table[-flr])
+
+                    Fid = 1-val
+                    trace = oe.contract("iIjJ,ik,kj,IK,KJ",Gamma,params[0],params[1],params[0].conj(),params[1].conj(), backend="jax").item()
+                    U, S, Vh = np.array(params[0]), np.eye(cur_truncate_dim), np.array(params[1])
+                    print(Fid, trace)
+                    if Fid > threshold:
+                        break   
+
+            if Fid > threshold:
+                break
+
+        return U, S, Vh, Fid, trace, truncate_dim
