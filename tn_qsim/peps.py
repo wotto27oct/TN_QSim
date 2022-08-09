@@ -28,10 +28,10 @@ class PEPS(TensorNetwork):
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
         truncate_dim (int) : truncation dim of virtual bond, default None
-        threthold_err (float) : the err threthold of singular values we keep
+        threshold_err (float) : the err threshold of singular values we keep
     """
 
-    def __init__(self, tensors, height, width, truncate_dim=None, threthold_err=None, bmps_truncate_dim=None):
+    def __init__(self, tensors, height, width, truncate_dim=None, threshold_err=None, bmps_truncate_dim=None):
         self.n = len(tensors)
         self.height = height
         self.width = width
@@ -44,7 +44,7 @@ class PEPS(TensorNetwork):
                 edge_info.append([i, self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w])
         super().__init__(edge_info, tensors)
         self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
+        self.threshold_err = threshold_err
         self.bmps_truncate_dim = bmps_truncate_dim
         self.inner_tree = None
 
@@ -389,7 +389,7 @@ class PEPS(TensorNetwork):
         self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
         return
 
-    def calc_inner_by_BMPS(self, truncate_dim=None, threthold=None, visualize=False):
+    def calc_inner_by_BMPS(self, truncate_dim=None, threshold=None, visualize=False):
         # contract inner and physical dim
         peps_tensors = []
         for idx in range(self.n):
@@ -410,7 +410,7 @@ class PEPS(TensorNetwork):
             else:
                 mps_tensors.append(tensor.reshape(shape[0],shape[1],shape[3]).transpose(0,2,1))
 
-        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threthold_err=1.0-threthold)
+        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threshold_err=1.0-threshold)
         mps.canonicalization()
 
         total_fid = 1.0
@@ -782,7 +782,7 @@ class PEPS(TensorNetwork):
                 tmp = oe.contract("abcd,d->abc",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,shape[3]**2,1)
         return tmp
 
-    def __create_down_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+    def __create_down_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None):
         # contract inner, physical and dangling dim
         total_fid = 1.0
         peps_tensors = []
@@ -792,7 +792,7 @@ class PEPS(TensorNetwork):
         
         # BMPS from down right
         mps_down_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_down.canonicalization()
         mps_down_list = []
         for h in range(self.height-1,-1,-1):
@@ -815,7 +815,7 @@ class PEPS(TensorNetwork):
 
         return mps_down_list, total_fid
 
-    def __create_right_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+    def __create_right_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None):
         # contract inner, physical and dangling dim
         total_fid = 1.0
         peps_tensors = []
@@ -825,7 +825,7 @@ class PEPS(TensorNetwork):
         
         # BMPS from down right
         mps_right_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
-        mps_right = MPS(mps_right_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_right = MPS(mps_right_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_right.canonicalization()
         mps_right_list = []
         for w in range(self.width-1,-1,-1):
@@ -958,13 +958,13 @@ class PEPS(TensorNetwork):
             Gamma = Gamma.transpose(2,3,0,1)
         return Gamma
         
-    def calc_Gamma_by_BMPS(self, trun_node_idx, bmps_truncate_dim=None, bmps_threthold=None, visualize=False):
+    def calc_Gamma_by_BMPS(self, trun_node_idx, bmps_truncate_dim=None, bmps_threshold=None, visualize=False):
         trun_node_idx, op_node_idx, trun_edge_idx, op_edge_idx = self.__return_idx_for_FET(trun_node_idx)
 
         if trun_edge_idx == 2 or trun_edge_idx == 4:
-            return self.calc_horizontal_Gamma_by_BMPS(trun_node_idx, op_node_idx, bmps_truncate_dim, bmps_threthold, visualize=visualize)
+            return self.calc_horizontal_Gamma_by_BMPS(trun_node_idx, op_node_idx, bmps_truncate_dim, bmps_threshold, visualize=visualize)
         else:
-            return self.calc_vertical_Gamma_by_BMPS(trun_node_idx, op_node_idx, bmps_truncate_dim, bmps_threthold, visualize=visualize)
+            return self.calc_vertical_Gamma_by_BMPS(trun_node_idx, op_node_idx, bmps_truncate_dim, bmps_threshold, visualize=visualize)
 
     def bond_truncate_by_Gamma(self, trun_node_idx, Gamma, sigma, xinv=None, yinv=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=50, visualize=False):
         """ calc bond truncation using Gamma and sigma and update PEPS
@@ -1080,7 +1080,7 @@ class PEPS(TensorNetwork):
 
         return Fid
         
-    def bond_truncate_by_Gamma_BMPS_old(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=20, gpu=True, visualize=False):
+    def bond_truncate_by_Gamma_BMPS_old(self, bmps_truncate_dim=None, bmps_threshold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=20, gpu=True, visualize=False):
         total_fid = 1.0
         for w in range(self.width-1):
             for h in range(self.height):
@@ -1088,19 +1088,19 @@ class PEPS(TensorNetwork):
                 
                 if visualize:
                     print(f"horizontal h:{h} w:{w}")
-                    inner_val , fid = self.calc_inner_by_BMPS(threthold=bmps_threthold)
+                    inner_val , fid = self.calc_inner_by_BMPS(threshold=bmps_threshold)
                     print(f"BMPS trace: {inner_val} fid:{fid}")
                     print("singularity:", self.calc_singularity())
                     if np.real_if_close(inner_val.item()) < 0.9999:
                         print("inner calc error happened!!", inner_val)
 
                 
-                Gamma = self.calc_Gamma_by_BMPS((h*self.width+w, h*self.width+w+1), bmps_truncate_dim, bmps_threthold, visualize)
+                Gamma = self.calc_Gamma_by_BMPS((h*self.width+w, h*self.width+w+1), bmps_truncate_dim, bmps_threshold, visualize)
                 sigma = np.eye(Gamma.shape[0])
 
                 U, S, Vh, Fid = None, None, None, 1.0
                 truncate_dim = None
-                if threthold is not None:
+                if threshold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                         if cur_truncate_dim == Gamma.shape[0]:
                             print("no truncation done")
@@ -1113,9 +1113,9 @@ class PEPS(TensorNetwork):
                         for sd in range(10):
                             U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
                             truncate_dim = cur_truncate_dim
-                            if Fid > threthold:
+                            if Fid > threshold:
                                 break
-                        if Fid > threthold:
+                        if Fid > threshold:
                             break
                             
                 # if truncation is executed        
@@ -1145,11 +1145,11 @@ class PEPS(TensorNetwork):
 
         return total_fid
     
-    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=20, gpu=True, is_calc_BMPS=True, is_fix_gauge=False, visualize=False):
+    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=20, gpu=True, is_calc_BMPS=True, is_fix_gauge=False, visualize=False):
         total_fid = 1.0
         mps_down_list, mps_right_list = None, None
         if is_calc_BMPS:
-            mps_down_list, fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threthold)
+            mps_down_list, fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threshold)
             total_fid *= fid
         else:
             mps_down_list = self.mps_down_list
@@ -1157,11 +1157,12 @@ class PEPS(TensorNetwork):
         # vertical FET from top left
         # BMPS from top left
         mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_top.canonicalization()
 
         #for h in range(0):
         for h in range(self.height-1):
+            print(f"vertical FET h{h}")
             # create top MPS
             mpo_tensors = []
             for w in range(self.width):
@@ -1174,7 +1175,7 @@ class PEPS(TensorNetwork):
                 # create Gamma to execute FET for each verical edges
                 if visualize:
                     print(f"vertical h:{h} w:{w}")
-                    print("BMPS trace:", self.calc_inner_by_BMPS(threthold=bmps_threthold))
+                    print("BMPS trace:", self.calc_inner_by_BMPS(threshold=bmps_threshold))
                     print("singularity:", self.calc_singularity())
                 top_nodes = tn.replicate_nodes(mps_top.nodes)
                 down_nodes = tn.replicate_nodes(mps_down_list[h+1].nodes)
@@ -1239,7 +1240,7 @@ class PEPS(TensorNetwork):
 
                 U, S, Vh, Fid = None, None, None, 1.0
                 truncate_dim = None
-                if threthold is not None:
+                if threshold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                         if cur_truncate_dim == Gamma.shape[0]:
                             print("no truncation done")
@@ -1250,11 +1251,12 @@ class PEPS(TensorNetwork):
                             U = None
                             break
                         for sd in range(10):
-                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
+                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, precision=1-threshold, trials=trials, visualize=visualize)
                             truncate_dim = cur_truncate_dim
-                            if Fid > threthold:
+                            print(f"Fid {Fid} threshold {threshold}")
+                            if Fid > threshold:
                                 break
-                        if Fid > threthold:
+                        if Fid > threshold:
                             break
                             
                 # if truncation is executed        
@@ -1310,14 +1312,14 @@ class PEPS(TensorNetwork):
         # horizontal FET from top left
 
         if is_calc_BMPS:
-            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threthold)
+            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threshold)
             total_fid *= fid
         else:
             mps_right_list = self.mps_right_list
 
         # BMPS from top left
         mps_left_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
-        mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_left.canonicalization()
 
         for w in range(self.width-1):
@@ -1333,7 +1335,7 @@ class PEPS(TensorNetwork):
             for h in range(self.height):
                 if visualize:
                     print(f"horizontal h:{h} w:{w}")
-                    inner_val , fid = self.calc_inner_by_BMPS(threthold=bmps_threthold)
+                    inner_val , fid = self.calc_inner_by_BMPS(threshold=bmps_threshold)
                     print(f"BMPS trace: {inner_val} fid:{fid}")
                     print("singularity:", self.calc_singularity())
                     if np.real_if_close(inner_val.item()) < 0.9999:
@@ -1390,18 +1392,18 @@ class PEPS(TensorNetwork):
 
                 U, S, Vh, Fid = None, None, None, 1.0
                 truncate_dim = None
-                if threthold is not None:
+                if threshold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                         if cur_truncate_dim == Gamma.shape[0]:
                             print("no truncation done")
                             U = None
                             break
                         for sd in range(10):
-                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, trials, visualize=visualize)
+                            U, S, Vh, Fid, trace = calc_optimal_truncation(Gamma, sigma, cur_truncate_dim, precision=1-threshold, trials=trials, visualize=visualize)
                             truncate_dim = cur_truncate_dim
-                            if Fid > threthold:
+                            if Fid > threshold:
                                 break
-                        if Fid > threthold:
+                        if Fid > threshold:
                             break
                             
                 # if truncation is executed        
@@ -1564,7 +1566,7 @@ class PEPS(TensorNetwork):
         return tree, cost, sp_cost"""
 
 
-    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False, calc_lim=None):
+    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False, calc_lim=None):
         """truncate the specified index using FET method
 
         Args:
@@ -1602,7 +1604,7 @@ class PEPS(TensorNetwork):
 
         U, Vh, Fid = None, None, 1.0
         truncate_dim = None
-        if threthold is not None:
+        if threshold is not None:
             for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                 if cur_truncate_dim == Gamma.shape[0]:
                     print("no truncation done")
@@ -1613,19 +1615,19 @@ class PEPS(TensorNetwork):
                     U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 
                 truncate_dim = cur_truncate_dim
-                if Fid > threthold:
+                if Fid > threshold:
                     break
         print(f"truncate dim: {truncate_dim}")
 
-        """# truncate while Fid < threthold
+        """# truncate while Fid < threshold
         if truncate_dim is None:
             truncate_dim = 1
         U, Vh, Fid = None, None, 1.0
         nU, nVh, nFid = None, None, 1.0
-        if threthold is not None:
+        if threshold is not None:
             for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
                 nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
-                if nFid < threthold:
+                if nFid < threshold:
                     truncate_dim = cur_truncate_dim + 1
                     break
                 U, Vh, Fid = nU, nVh, nFid
@@ -1685,7 +1687,7 @@ class PEPS(TensorNetwork):
         
         # horizontal BMPS
         mps_tensors = [np.array([1]).reshape(1,1,1) for _ in range(abs(hend - hstart))]
-        mps_horizontal = MPS(mps_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threshold)
+        mps_horizontal = MPS(mps_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_horizontal.canonicalization()
         wstep = 1 if wstart < wend else -1
         hstep = 1 if hstart < hend else -1
@@ -1721,7 +1723,7 @@ class PEPS(TensorNetwork):
         
         # vertical BMPS
         mps_tensors = [np.array([1]).reshape(1,1,1) for _ in range(abs(wend - wstart))]
-        mps_vertical = MPS(mps_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threshold)
+        mps_vertical = MPS(mps_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_vertical.canonicalization()
         hstep = 1 if hstart < hend else -1
         wstep = 1 if wstart < wend else -1
@@ -2180,26 +2182,13 @@ class PEPS(TensorNetwork):
         env_tensor = tn.contractors.auto(env_nodes, env_output_edges).tensor
         print("peps env tensor:", env_tensor.reshape(2**6, -1))
         
-<<<<<<< HEAD
         print("inner from env and center:", np.dot(center_tensor.flatten(), env_tensor.flatten()))
         
-=======
-        print("inner from env and center in peps:", np.dot(center_tensor.flatten(), env_tensor.flatten()))
-        
-        """env_flatten = env_tensor.flatten()
-        for i in range(len(env_flatten)):
-            env_flatten[i] = 0 if np.abs(env_flatten[i]) < 1e-20 else env_flatten[i]
-        print("env-flatten in peps", env_flatten)"""
->>>>>>> 0cce015 (maybe conflict)
 
         if tensorC_after.real < 1-1e-8:
             print("error! inner product != 1")
 
-<<<<<<< HEAD
         return tensorA_nodes, tensorB_nodes, left_state, right_state, top_state, down_state
-=======
-        return tensorA_nodes, tensorB_nodes, env_tensor, center_tensor
->>>>>>> 0cce015 (maybe conflict)
 
     def calc_full_update(self, left_idx, right_idx, top_idx, down_idx, truncate_dim, threshold=1.0-1e-8, bmps_threshold=1.0, iters=10, try_fix_gauge=False):
         """update tensor by combining ALS and GD using full environment
@@ -2577,7 +2566,7 @@ class PEPS(TensorNetwork):
 
         params = original_params
 
-        optimizer = opt.Adam(lr=(1-threshold)/)
+        optimizer = opt.Adam(lr=(1-threshold)*1000)
 
         for ep in range(iters):
             val, grad = value_and_grad_func(params)

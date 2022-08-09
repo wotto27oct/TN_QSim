@@ -637,7 +637,7 @@ class TensorNetwork():
             return result
 
     
-    """def fix_gauge_and_find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, threthold=None, visualize=False):
+    """def fix_gauge_and_find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, threshold=None, visualize=False):
         find optimal truncation U, Vh given Gamma and trun_dim
         Args:
             Gamma (np.array) : env-tensor Gamma_iIjJ

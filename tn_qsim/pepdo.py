@@ -24,10 +24,10 @@ class PEPDO(TensorNetwork):
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
         truncate_dim (int) : truncation dim of virtual bond, default None
-        threthold_err (float) : the err threthold of singular values we keep
+        threshold_err (float) : the err threshold of singular values we keep
     """
 
-    def __init__(self, tensors, height, width, truncate_dim=None, threthold_err=None, bmps_truncate_dim=None):
+    def __init__(self, tensors, height, width, truncate_dim=None, threshold_err=None, bmps_truncate_dim=None):
         self.n = len(tensors)
         self.height = height
         self.width = width
@@ -40,7 +40,7 @@ class PEPDO(TensorNetwork):
                 edge_info.append([i, 2*self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, 2*self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w, i+self.n])
         super().__init__(edge_info, tensors)
         self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
+        self.threshold_err = threshold_err
         self.bmps_truncate_dim = bmps_truncate_dim
         self.tree, self.trace_tree = None, None
         self.top_nodes_list, self.down_nodes_list = None, None
@@ -227,7 +227,7 @@ class PEPDO(TensorNetwork):
                 tmp = oe.contract("abcd,d->abc",tmp,np.array([1,0,0,1])).reshape(shape[1]**2,shape[2]**2,shape[3]**2,1)
         return tmp
 
-    """def __create_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+    """def __create_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None):
         # contract inner, physical and dangling dim
         total_fid = 1.0
         peps_tensors = []
@@ -237,7 +237,7 @@ class PEPDO(TensorNetwork):
         
         # BMPS from top left
         mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_top.canonicalization() 
         top_nodes_list = []
         for h in range(self.height):
@@ -258,7 +258,7 @@ class PEPDO(TensorNetwork):
         
         # BMPS from down right
         mps_down_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_down.canonicalization()
         down_nodes_list = []
         for h in range(self.height-1,-1,-1):
@@ -281,9 +281,9 @@ class PEPDO(TensorNetwork):
 
         return top_nodes_list, down_nodes_list, total_fid
     
-    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gpu=True, is_calc_BMPS=True):
+    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=None, gpu=True, is_calc_BMPS=True):
         if is_calc_BMPS:
-            self.__create_BMPS(bmps_truncate_dim, bmps_threthold)
+            self.__create_BMPS(bmps_truncate_dim, bmps_threshold)
         top_nodes_list, down_nodes_list, total_fid = self.top_nodes_list, self.down_nodes_list, self.bmps_fidelity
 
         # vertical FET from top left
@@ -319,7 +319,7 @@ class PEPDO(TensorNetwork):
                 Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
                 U, Vh, Fid = None, None, 1.0
                 truncate_dim = None
-                if threthold is not None:
+                if threshold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                         if cur_truncate_dim == Gamma.shape[0]:
                             print("no truncation done")
@@ -327,7 +327,7 @@ class PEPDO(TensorNetwork):
                             break
                         U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
                         truncate_dim = cur_truncate_dim
-                        if Fid > threthold:
+                        if Fid > threshold:
                             break
                             
                 # if truncation is executed        
@@ -375,7 +375,7 @@ class PEPDO(TensorNetwork):
                 Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
                 U, Vh, Fid = None, None, 1.0
                 truncate_dim = None
-                if threthold is not None:
+                if threshold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                         if cur_truncate_dim == Gamma.shape[0]:
                             print("no truncation done")
@@ -383,7 +383,7 @@ class PEPDO(TensorNetwork):
                             break
                         U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
                         truncate_dim = cur_truncate_dim
-                        if Fid > threthold:
+                        if Fid > threshold:
                             break
 
                 # if truncation is executed        
@@ -401,7 +401,7 @@ class PEPDO(TensorNetwork):
 
         return total_fid"""
     
-    def __create_down_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+    def __create_down_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None):
         # contract inner, physical and dangling dim
         total_fid = 1.0
         peps_tensors = []
@@ -411,7 +411,7 @@ class PEPDO(TensorNetwork):
         
         # BMPS from down right
         mps_down_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_down = MPS(mps_down_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_down.canonicalization()
         mps_down_list = []
         for h in range(self.height-1,-1,-1):
@@ -434,7 +434,7 @@ class PEPDO(TensorNetwork):
 
         return mps_down_list, total_fid
 
-    def __create_right_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None):
+    def __create_right_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None):
         # contract inner, physical and dangling dim
         total_fid = 1.0
         peps_tensors = []
@@ -444,7 +444,7 @@ class PEPDO(TensorNetwork):
         
         # BMPS from down right
         mps_right_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
-        mps_right = MPS(mps_right_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_right = MPS(mps_right_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_right.canonicalization()
         mps_right_list = []
         for w in range(self.width-1,-1,-1):
@@ -467,12 +467,12 @@ class PEPDO(TensorNetwork):
 
         return mps_right_list, total_fid
     
-    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gpu=True, is_calc_BMPS=True):
+    def bond_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=None, gpu=True, is_calc_BMPS=True):
         total_fid = 1.0
         mps_down_list, mps_right_list = None, None
         if is_calc_BMPS:
-            mps_down_list, total_fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threthold)
-            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threthold)
+            mps_down_list, total_fid = self.__create_down_BMPS(bmps_truncate_dim, bmps_threshold)
+            mps_right_list, fid = self.__create_right_BMPS(bmps_truncate_dim, bmps_threshold)
             total_fid *= fid
         else:
             mps_down_list, mps_right_list = self.mps_down_list, mps_right_list
@@ -480,7 +480,7 @@ class PEPDO(TensorNetwork):
         # vertical FET from top left
         # BMPS from top left
         mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_top.canonicalization()
 
         for h in range(self.height-1):
@@ -494,7 +494,7 @@ class PEPDO(TensorNetwork):
             total_fid = total_fid * fid
             for w in range(self.width):
                 print(f"vertical h:{h} w:{w}")
-                trace, _ = self.calc_trace_by_BMPS(threthold=bmps_threthold, visualize=False)
+                trace, _ = self.calc_trace_by_BMPS(threshold=bmps_threshold, visualize=False)
                 print(f"trace:", {np.trace(trace.reshape(2,2))})
                 top_nodes = tn.replicate_nodes(mps_top.nodes)
                 down_nodes = tn.replicate_nodes(mps_down_list[h+1].nodes)
@@ -525,7 +525,7 @@ class PEPDO(TensorNetwork):
                 Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
                 U, Vh, Fid = None, None, 1.0
                 truncate_dim = None
-                if threthold is not None:
+                if threshold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                         if cur_truncate_dim == Gamma.shape[0]:
                             print("no truncation done")
@@ -533,7 +533,7 @@ class PEPDO(TensorNetwork):
                             break
                         U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
                         truncate_dim = cur_truncate_dim
-                        if Fid > threthold:
+                        if Fid > threshold:
                             break
                             
                 # if truncation is executed        
@@ -559,7 +559,7 @@ class PEPDO(TensorNetwork):
         # horizontal FET from top left
         # BMPS from top left
         mps_left_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.height)]
-        mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_left = MPS(mps_left_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_left.canonicalization()
 
         for w in range(self.width-1):
@@ -573,7 +573,7 @@ class PEPDO(TensorNetwork):
             total_fid = total_fid * fid
             for h in range(self.height):
                 print(f"horizontal h:{h} w:{w}")
-                trace, _ = self.calc_trace_by_BMPS(threthold=bmps_threthold, visualize=False)
+                trace, _ = self.calc_trace_by_BMPS(threshold=bmps_threshold, visualize=False)
                 print(f"trace:", {np.trace(trace.reshape(2,2))})
                 left_node = tn.replicate_nodes(mps_left.nodes)
                 right_nodes = tn.replicate_nodes(mps_right_list[w+1].nodes)
@@ -604,7 +604,7 @@ class PEPDO(TensorNetwork):
                 Gamma = Gamma.reshape(dim1, dim1, dim2, dim2)
                 U, Vh, Fid = None, None, 1.0
                 truncate_dim = None
-                if threthold is not None:
+                if threshold is not None:
                     for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                         if cur_truncate_dim == Gamma.shape[0]:
                             print("no truncation done")
@@ -612,7 +612,7 @@ class PEPDO(TensorNetwork):
                             break
                         U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=True)
                         truncate_dim = cur_truncate_dim
-                        if Fid > threthold:
+                        if Fid > threshold:
                             break
                             
                 # if truncation is executed        
@@ -638,7 +638,7 @@ class PEPDO(TensorNetwork):
         return total_fid
 
 
-    def calc_trace_by_BMPS(self, truncate_dim=None, threthold=None, visualize=True):
+    def calc_trace_by_BMPS(self, truncate_dim=None, threshold=None, visualize=True):
         # contract inner and physical dim
         peps_tensors = []
         for idx in range(self.n):
@@ -659,7 +659,7 @@ class PEPDO(TensorNetwork):
             else:
                 mps_tensors.append(tensor.reshape(shape[0],shape[1],shape[3]).transpose(0,2,1))
 
-        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threthold_err=1.0-threthold)
+        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threshold_err=1.0-threshold)
         mps.canonicalization()
 
         total_fid = 1.0
@@ -682,13 +682,13 @@ class PEPDO(TensorNetwork):
 
         return mps.contract().flatten(), total_fid
 
-    def inner_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threthold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, is_calc_BMPS=True):
+    def inner_truncate_by_BMPS(self, bmps_truncate_dim=None, bmps_threshold=None, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=None, is_calc_BMPS=True):
         if is_calc_BMPS:
-            self.__create_BMPS(bmps_truncate_dim, bmps_threthold)
+            self.__create_BMPS(bmps_truncate_dim, bmps_threshold)
         _, down_nodes_list, total_fid = self.top_nodes_list, self.down_nodes_list, self.bmps_fidelity
         
         mps_top_tensors = [np.array([1]).reshape(1,1,1) for _ in range(self.width)]
-        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threthold_err=1-bmps_threthold)
+        mps_top = MPS(mps_top_tensors, truncate_dim=bmps_truncate_dim, threshold_err=1-bmps_threshold)
         mps_top.canonicalization() 
         top_nodes_list = []
         for h in range(self.height):
@@ -745,7 +745,7 @@ class PEPDO(TensorNetwork):
                     Gamma = oe.contract("iI,jJ->iIjJ",Gamma,eye)
                     U, Vh, Fid = None, None, 1.0
                     truncate_dim = None
-                    if threthold is not None:
+                    if threshold is not None:
                         for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                             if cur_truncate_dim == Gamma.shape[0]:
                                 print("no truncation done")
@@ -753,7 +753,7 @@ class PEPDO(TensorNetwork):
                                 break
                             U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=True, visualize=True)
                             truncate_dim = cur_truncate_dim
-                            if Fid > threthold:
+                            if Fid > threshold:
                                 break
                                 
                     # if truncation is executed   
@@ -989,13 +989,13 @@ class PEPDO(TensorNetwork):
         return tn, tree
 
 
-    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
+    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
         """truncate the specified index using FET method
 
         Args:
             trun_node_idx (list of int) : the node index that we truncate
             truncate_dim (int) : the target bond dimension
-            threthold (float) : the truncation threthold
+            threshold (float) : the truncation threshold
             trials (int) : the number of iterations
             visualize (bool) : if printing the optimization process or not
         """
@@ -1028,7 +1028,7 @@ class PEPDO(TensorNetwork):
         U, Vh, Fid = None, None, 1.0
         nU, nVh, nFid = None, None, 1.0
         truncate_dim = None
-        if threthold is not None:
+        if threshold is not None:
             for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                 if cur_truncate_dim == Gamma.shape[0]:
                     print("no truncation done")
@@ -1036,11 +1036,11 @@ class PEPDO(TensorNetwork):
                 if not gauge:
                     nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 else:
-                    nU, nVh, nFid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, threthold=threthold, visualize=visualize)
+                    nU, nVh, nFid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, threshold=threshold, visualize=visualize)
                 
                 U, Vh, Fid = nU, nVh, nFid
                 truncate_dim = cur_truncate_dim
-                if nFid > threthold:
+                if nFid > threshold:
                     break
         print(f"truncate dim: {truncate_dim}")
         """else:
@@ -1135,13 +1135,13 @@ class PEPDO(TensorNetwork):
         return tn, tree
 
 
-    def find_optimal_inner_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
+    def find_optimal_inner_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False):
         """truncate the specified index using FET method
 
         Args:
             trun_node_idx (int) : the node index that we truncate
             truncate_dim (int) : the target bond dimension
-            threthold (float) : the truncation threthold
+            threshold (float) : the truncation threshold
             trials (int) : the number of iterations
             visualize (bool) : if printing the optimization process or not
         """
@@ -1169,21 +1169,21 @@ class PEPDO(TensorNetwork):
         #    truncate_dim = 1
         U, Vh, Fid = None, None, 1.0
         truncate_dim = None
-        if threthold is not None:
+        if threshold is not None:
             for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                 if cur_truncate_dim == Gamma.shape[0]:
                     print("no truncation done")
                     return 1.0
                 U, Vh, Fid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 truncate_dim = cur_truncate_dim
-                if Fid > threthold:
+                if Fid > threshold:
                     break
         print(f"truncate dim: {truncate_dim}")
 
-        """if threthold is not None:
+        """if threshold is not None:
             for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
                 nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
-                if nFid < threthold:
+                if nFid < threshold:
                     truncate_dim = cur_truncate_dim + 1
                     break
                 U, Vh, Fid = nU, nVh, nFid

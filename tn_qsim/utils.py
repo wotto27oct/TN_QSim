@@ -235,7 +235,8 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
     past_trace = trace
     try_idx = 0
 
-    init_trial = 5
+    init_fluct = 10
+    init_trial = 20
 
     while (try_idx < trials):
         ## step1
@@ -244,7 +245,7 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         A = oe.contract("a,b->ab",P,P.conj())
         B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
 
-        if try_idx < init_trial:
+        if try_idx < init_fluct:
             B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
 
         Rmax = np.dot(np.linalg.pinv(B), P)
@@ -271,7 +272,7 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         A = oe.contract("a,b->ab",P,P.conj())
         B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
 
-        if try_idx < init_trial:
+        if try_idx < init_fluct:
             B += 1e-2 * np.diag(np.random.uniform(size=B.shape[0]))
 
         Rmax = np.dot(np.linalg.pinv(B), P)
