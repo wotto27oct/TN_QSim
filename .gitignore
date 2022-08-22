@@ -39,3 +39,6 @@ taskflow
 2DMERA*
 *.yaml
 .DS_Store
+TC_RCS*
+SWQsim
+simulate_sycamore
