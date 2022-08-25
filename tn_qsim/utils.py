@@ -2,6 +2,7 @@ import opt_einsum as oe
 import tensornetwork as tn
 import quimb.tensor as qtn
 import numpy as np
+import functools
 
 def from_nodes_to_str(node_list, output_edge_order):
     input_sets = [set(node.edges) for node in node_list]
@@ -295,3 +296,24 @@ def calc_optimal_truncation(Gamma, sigma, truncate_dim, precision=1e-10, trials=
         try_idx += 1
 
     return U, S, Vh, past_fid, past_trace
+
+def gen_func_from_tree(tree, backend="jax"):
+    """generate renormalization function
+
+    Args:
+        tree (ctg.ContractionTree) : the contraction tree for renormalization
+        gpunum (int) : the number of GPU we use
+    Returns:
+        func : get sliced arrays and return renormalized hamiltonian, args (H, U1, U2, ..., U1.conj(), U2.conj(), ...)
+    """
+
+    def func(arrays):
+        contract_core = functools.partial(tree.contract_core, backend=backend)
+        slices = []
+        for i in range(tree.nslices):
+            slices.append(contract_core(tree.slice_arrays(arrays, i)))
+
+        x = tree.gather_slices(slices)
+        return x
+    
+    return func
