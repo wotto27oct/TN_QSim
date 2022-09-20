@@ -188,7 +188,7 @@ class PEPS3D(TensorNetwork):
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
 
     
-    def amplitude_by_quimb(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None, backend="jax"):
+    def amplitude_by_quimb(self, tensors, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None, backend="jax", precision="complex64"):
         """contract amplitude with given product states by using quimb (typically computational basis)
 
         Args:
@@ -203,7 +203,7 @@ class PEPS3D(TensorNetwork):
             node_list, output_edge_order = self.prepare_amplitude(tensors)
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
-        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq, backend=backend)
+        return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq, backend=backend, precision=precision)
 
 
     def apply_MPO(self, tidx, mpo):

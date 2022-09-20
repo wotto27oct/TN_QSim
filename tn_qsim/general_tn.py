@@ -320,7 +320,7 @@ class TensorNetwork():
         return tnq, tree
 
 
-    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, output_inds=None, target_size=None, gpu=True, thread=1, seq="ADCRS", backend="jax", is_visualize=False):   
+    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, output_inds=None, target_size=None, gpu=True, thread=1, seq="ADCRS", backend="jax", precision="complex64", is_visualize=False):   
         """execute contraction for given input and algorithm or tree
 
         Args:
@@ -395,7 +395,10 @@ class TensorNetwork():
                 x = tree_s.gather_slices(slices, progbar=False)
                 return x
         elif backend == "cupy":
-            arrays = [cp.array(tensor.data, dtype=np.complex64) for tensor in tn.tensors]
+            if precision == "complex128":
+                arrays = [cp.array(tensor.data, dtype=np.complex128) for tensor in tn.tensors]
+            else:
+                arrays = [cp.array(tensor.data, dtype=np.complex64) for tensor in tn.tensors]
             # use jax to use jit and GPU
             pool = ThreadPoolExecutor(1)
 
