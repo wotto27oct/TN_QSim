@@ -3,9 +3,7 @@ from numpy.core.fromnumeric import reshape
 import tensornetwork as tn
 from tn_qsim.general_tn import TensorNetwork
 from tn_qsim.mpo import MPO
-from tn_qsim.utils import from_tn_to_quimb
-import jax
-import functools
+from tn_qsim.utils import from_tn_to_quimb, from_nodes_to_str
 
 class MERA3D(TensorNetwork):
     """class of MERA3D for renormalization
@@ -80,7 +78,7 @@ class MERA3D(TensorNetwork):
         
         return tn, tree
 
-    def renormalize(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
+    def renormalize(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=""):
         """renormalize MERA
 
         Args:
@@ -220,10 +218,14 @@ class MERA3D(TensorNetwork):
         """
 
         node_list, output_edge_order = self.prepare_renormalize()
+        input_alpha, output_alpha, edge_alpha_dims = from_nodes_to_str(node_list, output_edge_order, offset=0)
 
         #tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
 
         print(f"contraction cost: {tree.contraction_cost():,} peak size: {tree.peak_size():,}")
+        print("inputs:", input_alpha)
+        print("outputs:", output_alpha)
+        print(f"slice: {tree.sliced_inds}")
         print(tree.get_ssa_path())
         print(tree.flat_tree())
         tree.print_contractions()

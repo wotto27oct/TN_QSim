@@ -249,10 +249,14 @@ def calc_energy_from_hamiltonian(hamiltonian, U_var, V_var, W_var, psi_var, tdim
 
     # renormalizad Hamiltonian (low dimensional)
     # h_renorm = (h_renorm + tf.transpose(h_renorm, (3, 2, 1, 0, 7, 6, 5, 4))) / 2
-    h_renorm = tf.reshape(h_renorm, (tdim_list[-1] ** 4, tdim_list[-1] ** 4))
-
+    symm_list = [(0,2,1,3,4,6,5,7),(1,3,0,2,5,7,4,6),(1,0,3,2,5,4,7,6),
+                (2,3,0,1,6,7,4,5),(2,0,3,1,6,4,7,5),(3,1,2,0,7,5,6,4),(3,2,1,0,7,6,5,4)]
+    h_renorm_symm = h_renorm / 8.0
+    for sl in symm_list:
+        h_renorm_symm += tf.transpose(h_renorm, sl) / 8.0
+    h_renorm_symm = tf.reshape(h_renorm_symm, (tdim_list[-1] ** 4, tdim_list[-1] ** 4))
     # energy
-    E = tf.cast((tf.linalg.adjoint(psi_var_c) @ h_renorm @ psi_var_c), dtype=tf.float64)[0, 0]
+    E = tf.cast((tf.linalg.adjoint(psi_var_c) @ h_renorm_symm @ psi_var_c), dtype=tf.float64)[0, 0]
     
     return E
 
@@ -361,8 +365,12 @@ def calc_reduced_rho(U_var, V_var, W_var, psi_var, tdim_list, inv_renormalize_fu
     bdim = tdim_list[-1]
     psi_renorm = tf.reshape(psi_var_c, (bdim, bdim, bdim, bdim))
     rho_renorm = oe.contract("abcd,efgh->abcdefgh",tf.math.conj(psi_renorm), psi_renorm, backend="tensorflow")
-
-    reduced_rho_list = [rho_renorm]
+    symm_list = [(0,2,1,3,4,6,5,7),(1,3,0,2,5,7,4,6),(1,0,3,2,5,4,7,6),
+                (2,3,0,1,6,7,4,5),(2,0,3,1,6,4,7,5),(3,1,2,0,7,5,6,4),(3,2,1,0,7,6,5,4)]
+    rho_renorm_symm = rho_renorm / 8.0
+    for sl in symm_list:
+        rho_renorm_symm += tf.transpose(rho_renorm, sl) / 8.0
+    reduced_rho_list = [rho_renorm_symm]
 
     nlayer = len(U_var)
 

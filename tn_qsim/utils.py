@@ -4,7 +4,7 @@ import quimb.tensor as qtn
 import numpy as np
 import functools
 
-def from_nodes_to_str(node_list, output_edge_order):
+def from_nodes_to_str(node_list, output_edge_order, offset=8):
     input_sets = [set(node.edges) for node in node_list]
     output_set = set()
     for edge in tn.get_all_edges(node_list):
@@ -14,7 +14,7 @@ def from_nodes_to_str(node_list, output_edge_order):
 
     edge_alpha = dict()
     edge_alpha_dims = dict()
-    alpha_offset = 0
+    alpha_offset = offset
     for node in node_list:
         for e in node.edges:
             if not e in edge_alpha:

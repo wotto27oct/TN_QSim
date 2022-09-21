@@ -41,23 +41,24 @@ def mera_layer_func(H, U, V, tdim_list, renormalize_func, l):
         elif o == "Uc":
             tensors.append(tf.reshape(tf.math.conj(U), (tdim, tdim, tdim, tdim)))
         elif o == "V":
-            tensors.append(tf.reshape(V, (tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(V, (tdim, tdim, tdim, ntdim)))
         elif o == "Vc":
-            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, ntdim)))
     
     res = renormalize_func[l][0](tensors)
 
     for i in range(1, len(renormalize_func[l])):
-        res += renormalize_func[l][i](tensors)
+        tmp = renormalize_func[l][i](tensors)
+        res += tmp
 
     return res / len(renormalize_func[l])
 
-def mera_layer_pos(H, U, V, W, tdim_list, renormalize_func, l, i):
+def mera_layer_pos(H, U, V, tdim_list, renormalize_func, l, i):
     """calculate hamiltonian renormalization at lth layer, ith position of Hamiltonian, using H, U, V, W
 
     Args:
         H (tf.Variable): hamiltonian to be renormalized
-        U, V, W (tf.Variable) : mera layer tensors
+        U, V (tf.Variable) : mera layer tensors
         tdim_list (list of int) : index dimension for each layer
         renormalize_func (list of list of func) : renormalize function for each layer and each H position
         l (int) : target layer
@@ -69,28 +70,24 @@ def mera_layer_pos(H, U, V, W, tdim_list, renormalize_func, l, i):
     # index dimension after renormalization
     ntdim = tdim_list[l+1]
 
-    tensor_order = ["H", "U", "V", "V", "V", "V", "W", "W", "W", "W", "Uc", "Vc", "Vc", "Vc", "Vc", "Wc", "Wc", "Wc", "Wc"]
+    tensor_order = ["H", "U", "V", "V", "Uc", "Vc", "Vc"]
 
     tensors = []
     for o in tensor_order:
         if o == "H":
             tensors.append(H)
         elif o == "U":
-            tensors.append(tf.reshape(U, (tdim, tdim, tdim, tdim, tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(U, (tdim, tdim, tdim, tdim)))
         elif o == "Uc":
-            tensors.append(tf.reshape(tf.math.conj(U), (tdim, tdim, tdim, tdim, tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(tf.math.conj(U), (tdim, tdim, tdim, tdim)))
         elif o == "V":
-            tensors.append(tf.reshape(V, (tdim, tdim, tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(V, (tdim, tdim, tdim, ntdim)))
         elif o == "Vc":
-            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, tdim, tdim, tdim)))
-        elif o == "W":
-            tensors.append(tf.reshape(W, (tdim, tdim, tdim, tdim, tdim, ntdim)))
-        elif o == "Wc":
-            tensors.append(tf.reshape(tf.math.conj(W), (tdim, tdim, tdim, tdim, tdim, ntdim)))
+            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, ntdim)))
     
     res = renormalize_func[l][i](tensors)
 
-    return res / len(renormalize_func[l])
+    return res
 
 def mera_layer_slice(H, U, V, tdim_list, renormalize_tree, l, i, s):
     """calculate renormalization at lth layer, ith position of Hamiltonian, sth slicing, using H, U, V, W
@@ -121,21 +118,21 @@ def mera_layer_slice(H, U, V, tdim_list, renormalize_tree, l, i, s):
         elif o == "Uc":
             tensors.append(tf.reshape(tf.math.conj(U), (tdim, tdim, tdim, tdim)))
         elif o == "V":
-            tensors.append(tf.reshape(V, (tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(V, (tdim, tdim, tdim, ntdim)))
         elif o == "Vc":
-            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, ntdim)))
     
     tree = renormalize_tree[l][i]
     contract_core = functools.partial(tree.contract_core, backend="tensorflow")
     return contract_core(tree.slice_arrays(tensors, s)) / len(renormalize_tree[l])
 
-def mera_layer_grad_slice(H, rho, U, V, W, tdim_list, grad_tree, l, i, idx, s):
+def mera_layer_grad_slice(H, rho, U, V, tdim_list, grad_tree, l, i, idx, s):
     """calculate grad at lth layer, ith position of Hamiltonian, idxh-th unitary/isometry, sth slicing, using H, U, V, W
 
     Args:
         H (tf.Variable): hamiltonian to be renormalized
         rho (tf.Variable): reduced rho
-        U, V, W (tf.Variable) : mera layer tensors
+        U, V, (tf.Variable) : mera layer tensors
         tdim_list (list of int) : index dimension for each layer
         renormalize_tree (list of list of ctg.ContractionTree) : renormalize tree for each layer and each H position
         l (int) : target layer
@@ -149,7 +146,7 @@ def mera_layer_grad_slice(H, rho, U, V, W, tdim_list, grad_tree, l, i, idx, s):
     # index dimension after renormalization
     ntdim = tdim_list[l+1]
 
-    tensor_order = ["H", "U", "V", "V", "V", "V", "W", "W", "W", "W", "Uc", "Vc", "Vc", "Vc", "Vc", "Wc", "Wc", "Wc", "Wc"]
+    tensor_order = ["H", "U", "V", "V", "Uc", "Vc", "Vc"]
 
     tensors = [rho]
     for j, o in enumerate(tensor_order):
@@ -158,17 +155,13 @@ def mera_layer_grad_slice(H, rho, U, V, W, tdim_list, grad_tree, l, i, idx, s):
         if o == "H":
             tensors.append(H)
         elif o == "U":
-            tensors.append(tf.reshape(U, (tdim, tdim, tdim, tdim, tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(U, (tdim, tdim, tdim, tdim)))
         elif o == "Uc":
-            tensors.append(tf.reshape(tf.math.conj(U), (tdim, tdim, tdim, tdim, tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(tf.math.conj(U), (tdim, tdim, tdim, tdim)))
         elif o == "V":
-            tensors.append(tf.reshape(V, (tdim, tdim, tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(V, (tdim, tdim, tdim, ntdim)))
         elif o == "Vc":
-            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, tdim, tdim, tdim)))
-        elif o == "W":
-            tensors.append(tf.reshape(W, (tdim, tdim, tdim, tdim, tdim, ntdim)))
-        elif o == "Wc":
-            tensors.append(tf.reshape(tf.math.conj(W), (tdim, tdim, tdim, tdim, tdim, ntdim)))
+            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, ntdim)))
     
     tree = grad_tree[l][i][idx]
     contract_core = functools.partial(tree.contract_core, backend="tensorflow")
@@ -201,9 +194,9 @@ def inv_mera_layer_func(rho, U, V, tdim_list, inv_renormalize_func, l):
         elif o == "Uc":
             tensors.append(tf.reshape(tf.math.conj(U), (tdim, tdim, tdim, tdim)))
         elif o == "V":
-            tensors.append(tf.reshape(V, (tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(V, (tdim, tdim, tdim, ntdim)))
         elif o == "Vc":
-            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, tdim)))
+            tensors.append(tf.reshape(tf.math.conj(V), (tdim, tdim, tdim, ntdim)))
 
     res = inv_renormalize_func[l][0](tensors).numpy()
 
@@ -237,6 +230,8 @@ def calc_energy_from_hamiltonian(hamiltonian, U_var, V_var, psi_var, tdim_list, 
     # renormalizad Hamiltonian (low dimensional)
     h_renorm = (h_renorm + tf.transpose(h_renorm, (1, 0, 3, 2))) / 2
     h_renorm = tf.reshape(h_renorm, (tdim_list[-1] ** 2, tdim_list[-1] ** 2))
+
+    print((tf.linalg.adjoint(psi_var_c) @ h_renorm @ psi_var_c).numpy())
 
     # energy
     E = tf.cast((tf.linalg.adjoint(psi_var_c) @ h_renorm @ psi_var_c), dtype=tf.float64)[0, 0]
@@ -303,13 +298,13 @@ def calc_energy_slice(hamiltonian, reduced_rho, U_var, V_var, tdim_list, renorma
     
     return h_renorm, E
 
-def calc_grad_slice(hamiltonian, reduced_rho, U_var, V_var, W_var, tdim_list, grad_tree, l, i, idx, s):
+def calc_grad_slice(hamiltonian, reduced_rho, U_var, V_var, tdim_list, grad_tree, l, i, idx, s):
     """calculate energy using renormalized hamiltonian and reduced rho at lth layer, ith position and sth slicing
 
     Args:
         hamiltonian (tf.Variable) : renormalized hamiltonian at layer l
         reduced_rho (tf.Variable) : inv-renormalized density op at layer l
-        U_var, V_var, W_var (list of tf.Variable) : mera layer tensors
+        U_var, V_var (list of tf.Variable) : mera layer tensors
         tdim_list (list of int) : index dimension for each layer
         renormalize_tree (list of list of ctg.ContractionTree) : renormalize tree for each layer and each H position
         l (int) : target layer
@@ -320,12 +315,11 @@ def calc_grad_slice(hamiltonian, reduced_rho, U_var, V_var, W_var, tdim_list, gr
     # convert real valued variables back to complex valued tensors
     U_var_c = qgo.manifolds.real_to_complex(U_var)
     V_var_c = qgo.manifolds.real_to_complex(V_var)
-    W_var_c = qgo.manifolds.real_to_complex(W_var)
 
     # initial local Hamiltonian term
     h_renorm = hamiltonian
 
-    grad = mera_layer_grad_slice(h_renorm, reduced_rho, U_var_c, V_var_c, W_var_c, tdim_list, grad_tree, l, i, idx, s)
+    grad = mera_layer_grad_slice(h_renorm, reduced_rho, U_var_c, V_var_c, tdim_list, grad_tree, l, i, idx, s)
     
     return grad
 

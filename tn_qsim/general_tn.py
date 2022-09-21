@@ -318,7 +318,7 @@ class TensorNetwork():
         return tnq, tree
 
 
-    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, output_inds=None, target_size=None, gpu=True, thread=1, seq="ADCRS", is_visualize=False):   
+    def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, output_inds=None, target_size=None, gpu=True, thread=1, seq="ADCRS", backend="jax", precision="complex64", is_visualize=False):   
         """execute contraction for given input and algorithm or tree
 
         Args:
@@ -352,232 +352,66 @@ class TensorNetwork():
         if is_visualize:
             print(f"overhead : {tree_s.contraction_cost() / tree.contraction_cost():.2f} nslice: {tree_s.nslices}")
 
-        if gpu and tree_s.total_flops() > 1e8:
-            arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
-            # use jax to use jit and GPU
-            pool = ThreadPoolExecutor(1)
-
-            contract_core_jit = jax.jit(functools.partial(tree_s.contract_core, backend="jax"))
-
-            fs = [
-                pool.submit(contract_core_jit, tree_s.slice_arrays(arrays, i))
-                for i in range(tree_s.nslices)
-            ]
-
-            slices = (np.array(f.result()) for f in fs)
-
-            x = tree_s.gather_slices(slices, progbar=True)
-            return x
-            """gpus = jax.devices('gpu')
-            print(gpus)
-            pnum = len(gpus)
-
-            arrays = []
-            # allocate array to each GPU
-            for p in range(pnum):
-                arrays.append([jax.device_put(tensor.data, gpus[p]) for tensor in tn.tensors])
-
-            # jit complie for each GPU
-            contract_jit = []
-            for i in range(pnum):
-                contract_jit.append(jax.jit(functools.partial(tree_s.contract_core, backend="jax"), device=gpus[i]))
-
-            # contract asynchronous
-            value = [None for _ in range(pnum)]
-            if pnum > tree.nslices:
-                for i in range(tree.nslices):
-                    value[i] = contract_jit[i%pnum](tree_s.slice_arrays(arrays[i%pnum], i))
-            else:
-                for i in range(pnum):
-                    print(f"compling {i}th jit")
-                    value[i] = contract_jit[i%pnum](tree_s.slice_arrays(arrays[i%pnum], i))
-                for i in range(pnum, tree.nslices):
-                    value[i%pnum] += contract_jit[i%pnum](tree_s.slice_arrays(arrays[i%pnum], i))
-
-            # gather values
-            x = np.array(value[0])
-            print(x.shape)
-            if pnum > 1:
-                for val in value[1:]:
-                    if value is not None:
-                        x += np.array(val)
-                
-            return x"""
-            #rep_num = tree_s.nslices // pal_num
-            #arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
-            """arrays1 = [jax.device_put(tensor.data, gpus[0]) for tensor in tn.tensors]
-            arrays2 = [jax.device_put(tensor.data, gpus[1]) for tensor in tn.tensors]
-            print(arrays1[0].device_buffer.device())
-            print(arrays2[0].device_buffer.device())"""
-            #for ar in arrays:
-            #    print(ar.shape)
-            #arrays = [tf.convert_to_tensor(tensor.data) for tensor in tn.tensors]
-            #sarrays = [tree_s.slice_arrays(arrays, i) for i in range(tree_s.nslices)]
-            #varrays = [np.stack([sarrays[i][j] for i in range(tree_s.nslices)]) for j in range(len(arrays))]
-            #parrays = [tensor.reshape(rep_num, len(gpus), *tensor.shape[1:]) for tensor in varrays]
-
-            #for ar in parrays:
-            #    print(ar.shape)
-
-            """contract_core = jax.pmap(functools.partial(tree_s.contract_core, backend="jax"), devices=gpus)
-
-
-            fs = []
-            for i in range(rep_num):
-                print(f"{i}th pmap")
-                fs.append(contract_core([parrays[j][i] for j in range(len(arrays))]))
-            
-            for f in fs:
-                print(f.shape)
-            exit()"""
-
-            """def func(arg):
-                return jax.numpy.trace(tree_s.contract_core(arg, backend="jax").reshape(4**4,-1)).real
-
-            contract_jit = []
-            for i in range(len(gpus)):
-                print(f"compiling for {i}th gpu")
-                contract_jit.append(jax.jit(jax.value_and_grad(func), device=gpus[i]))
-
-            start = time.time()
-            value1, grad1 = contract_jit[0](tree_s.slice_arrays(arrays1, 0))
-            value2, grad2 = contract_jit[1](tree_s.slice_arrays(arrays2, 1))"""
-            """for r in range(1, rep_num):
-                #print(f"{r}th repetation")
-                svalue1, sgrad1 = contract_jit[0](tree_s.slice_arrays(arrays1, len(gpus)*r))
-                svalue2, sgrad2 = contract_jit[1](tree_s.slice_arrays(arrays2, len(gpus)*r+1))
-                if value1 == None:
-                    value1 = svalue1
-                    grad1 = [g for g in sgrad1]
-                else:
-                    value1 += svalue1
-                    for i in range(len(grad1)):
-                        grad1[i] += sgrad1[i]
-                if value2 == None:
-                    value2 = svalue2
-                    grad2 = [g for g in sgrad2]
-                else:
-                    value2 += svalue2
-                    for i in range(len(grad2)):
-                        grad2[i] += sgrad2[i]
-                value1 += svalue1
-                for i in range(len(grad1)):
-                    grad1[i] += sgrad1[i]
-                value2 += svalue2
-                for i in range(len(grad2)):
-                    grad2[i] += sgrad2[i]"""
-        
-
-            """print(value1)
-            print(value2)
-            end = time.time()
-            print(f"elapsed time for #gpu {len(gpus)}: {end - start}[s]")
-            exit()"""
-
-            """value = None
-            grad = None
-            start = time.time()
-            for r in range(rep_num):
-                print(f"{r}th repetation")
-                pool = ThreadPoolExecutor(len(gpus))
-                fs = [
-                    pool.submit(contract_jit[i], tree_s.slice_arrays(arrays, len(gpus)*r+i))
-                    for i in range(len(gpus))
-                ]
-                for f in fs:
-                    svalue, sgrad = f.result()
-                    if value == None:
-                        value = np.array(svalue)
-                        grad = [np.array(g) for g in sgrad]
-                    else:
-                        value += np.array(svalue)
-                        for i in range(len(grad)):
-                            grad[i] += np.array(sgrad[i])
-                #jax.interpreters.xla._xla_callable.cache_clear()"""
-
-            """print(value)
-            for g in grad:
-                print(g.shape)
-            end = time.time()
-            print(f"elapsed time for #gpu {len(gpus)}: {end - start}[s]")
-            exit()"""
-
-
-            
-            #contract_core = functools.partial(tree_s.contract_core, backend="tensorflow")
-            
-            #fs = []
-            #for i in range(rep_num):
-            #    print(f"{i}th pmap")
-            #    fs.append(contract_core([parrays[j][i][0] for j in range(len(arrays))]))
-            
-            ##for f in fs:
-            #    print(f.shape)
-            #exit()
-            #print("arrays shape")
-            #for ar in arrays:
-            #    print(ar.shape)
-            # use jax to use jit and GPU
-            #pool = ThreadPoolExecutor(1)
-
-            #def func(arg):
-            #    return jax.numpy.trace(tree_s.contract_core(arg, backend="jax").reshape(4**4,-1)).real
-                
-            #contract_core_jit = [None, None]
-            #contract_core_jit[0] = jax.jit(functools.partial(tree_s.contract_core, backend="jax"), device=gpus[0])
-            #contract_core_jit[1] = jax.jit(functools.partial(tree_s.contract_core, backend="jax"), device=gpus[1])
-
-            #contract_grad_jit = [None, None]
-            #contract_grad_jit[0] = jax.checkpoint(jax.jit(jax.grad(func), device=gpus[0]))
-            #contract_grad_jit[1] = jax.checkpoint(jax.jit(jax.grad(func), device=gpus[1]))
-            #fs = []
-            #for i in range(tree_s.nslices):
-            #    fs.append(contract_core_jit(tree_s.slice_arrays(arrays, i)))
-
-            #fs = [
-            #    pool.submit(contract_grad_jit[0], tree_s.slice_arrays(arrays, i))
-            #    for i in range(tree_s.nslices)
-            #]
-
-            #contract_core_pmap = jax.pmap(functools.partial(tree_s.contract_core, backend="jax"))
-            #slice_arrays = jax.numpy.array([tree_s.slice_arrays(arrays, i) for i in range(tree_s.nslices)])
-            #fs = contract_core_pmap(slice_arrays)
-
-            #print("calclated grad shape")
-            #for f in fs:
-            #    for arr in f.result():
-            #        print(arr.shape)
-
-            #slices = (np.array(f.result()) for f in fs)
-            #for s in slices:
-            #    print(s.shape)
-
-            #x = tree_s.gather_slices(slices, progbar=True)
-            #return x
-        else:
-            arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
-            # use jax to use jit
-            contract_core_jit = jax.jit(functools.partial(tree_s.contract_core, backend="jax"), backend="cpu")
-            
-            slices = []
-
-            for t in range(0, tree_s.nslices, thread):
-                if is_visualize:
-                    print(f"{t}th parallel")
-                end_thread = tree_s.nslices if tree_s.nslices < (t+1)*thread else (t+1)*thread
-                #pool = ThreadPoolExecutor(end_thread - t*thread) if tree_s.nslices < (t+1)*thread else ThreadPoolExecutor(thread)
+        if backend == "jax":
+            if gpu and tree_s.total_flops() > 1e8:
+                arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
+                # use jax to use jit and GPU
                 pool = ThreadPoolExecutor(1)
+
+                contract_core_jit = jax.jit(functools.partial(tree_s.contract_core, backend="jax"))
 
                 fs = [
                     pool.submit(contract_core_jit, tree_s.slice_arrays(arrays, i))
-                    for i in range(t*thread, end_thread)
+                    for i in range(tree_s.nslices)
                 ]
 
-                slices = slices + [np.array(f.result()) for f in fs]
+                slices = (np.array(f.result()) for f in fs)
 
-            x = tree_s.gather_slices(slices, progbar=False)
+                x = tree_s.gather_slices(slices, progbar=True)
+                return x
+            else:
+                arrays = [jax.numpy.array(tensor.data) for tensor in tn.tensors]
+                # use jax to use jit
+                contract_core_jit = jax.jit(functools.partial(tree_s.contract_core, backend="jax"), backend="cpu")
+                
+                slices = []
+
+                for t in range(0, tree_s.nslices, thread):
+                    if is_visualize:
+                        print(f"{t}th parallel")
+                    end_thread = tree_s.nslices if tree_s.nslices < (t+1)*thread else (t+1)*thread
+                    #pool = ThreadPoolExecutor(end_thread - t*thread) if tree_s.nslices < (t+1)*thread else ThreadPoolExecutor(thread)
+                    pool = ThreadPoolExecutor(1)
+
+                    fs = [
+                        pool.submit(contract_core_jit, tree_s.slice_arrays(arrays, i))
+                        for i in range(t*thread, end_thread)
+                    ]
+
+                    slices = slices + [np.array(f.result()) for f in fs]
+
+                x = tree_s.gather_slices(slices, progbar=False)
+                return x
+        elif backend == "cupy":
+            import cupy as cp
+            if precision == "complex128":
+                arrays = [cp.array(tensor.data, dtype=np.complex128) for tensor in tn.tensors]
+            else:
+                arrays = [cp.array(tensor.data, dtype=np.complex64) for tensor in tn.tensors]
+            # use jax to use jit and GPU
+            pool = ThreadPoolExecutor(1)
+
+            contract_core = functools.partial(tree_s.contract_core, backend="cupy")
+
+            fs = [
+                pool.submit(contract_core, tree_s.slice_arrays(arrays, i))
+                for i in range(tree_s.nslices)
+            ]
+
+            slices = (f.result().get() for f in fs)
+
+            x = tree_s.gather_slices(slices, progbar=True)
             return x
-
 
     def contract_tree(self, node_list, output_edge_order=None, algorithm=None, memory_limit=2**28, tree=None, path=None, visualize=False):   
         """execute contraction for given input and algorithm or tree
