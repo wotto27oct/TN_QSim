@@ -6,7 +6,6 @@ Makefile
 __pycache__/
 data*
 ./pjobs
-test*.py
 test*.md
 *.rb
 pjobs
