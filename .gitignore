@@ -38,3 +38,10 @@ taskflow
 2DMERA*
 *.yaml
 .DS_Store
+TC_RCS*
+<<<<<<< HEAD
+SWQsim
+simulate_sycamore
+=======
+*.log
+>>>>>>> origin/cupy
