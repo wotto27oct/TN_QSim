@@ -226,6 +226,3 @@ class MERA3D(TensorNetwork):
         for idx, tidx in enumerate(output_support):
             self.top_edges[tidx] = [len(self.top_nodes)-1, len(input_support)+idx]
             self.down_edges[tidx] = [len(self.down_nodes)-1, len(input_support)+idx]
-
-    
-    
