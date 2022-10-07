@@ -16,10 +16,10 @@ class MPO(TensorNetwork):
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
         truncate_dim (int) : truncation dim of virtual bond, default None
-        threthold_err (float) : the err threthold of singular values we keep
+        threshold_err (float) : the err threshold of singular values we keep
     """
 
-    def __init__(self, tensors, truncate_dim=None, threthold_err=None):
+    def __init__(self, tensors, truncate_dim=None, threshold_err=None):
         self.n = len(tensors)
         edge_info = []
         for i in range(self.n):
@@ -27,7 +27,7 @@ class MPO(TensorNetwork):
         super().__init__(edge_info, tensors)
         self.apex = None
         self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
+        self.threshold_err = threshold_err
 
     @property
     def virtual_dims(self):
@@ -57,7 +57,6 @@ class MPO(TensorNetwork):
         for i in range(self.n):
             output_edge_order.append(cp_nodes[i][1])
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
-
 
     def apply_gate(self, tidx, gtensor):
         """ apply nqubit gate
@@ -128,7 +127,7 @@ class MPO(TensorNetwork):
                 right_edges.append(node_edges[i+j+1])
                 right_edges.append(node_edges[i+j+1+len(tidx)])
             right_edges.append(node_edges[-1])
-            U, s, Vh, trun_s = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threthold_err)
+            U, s, Vh, trun_s = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threshold_err)
             U_reshape_edges = [node_edges[i], node_edges[i+len(tidx)], inner_edge, s[0]] if is_direction_right else [node_edges[i], node_edges[i+len(tidx)], s[0], inner_edge]
             self.nodes[tidx[i]] = U.reorder_edges(U_reshape_edges)
             inner_edge = s[0]
@@ -220,7 +219,7 @@ class MPO(TensorNetwork):
                 right_edges.append(node_edges[i+j+1])
                 right_edges.append(node_edges[i+j+1+len(tidx)])
             right_edges.append(node_edges[-1])
-            U, s, Vh, trun_s = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threthold_err)
+            U, s, Vh, trun_s = tn.split_node_full_svd(tmp, left_edges, right_edges, self.truncate_dim, self.threshold_err)
             U_reshape_edges = [node_edges[i], node_edges[i+len(tidx)], inner_edge, s[0]] if is_direction_right else [node_edges[i], node_edges[i+len(tidx)], s[0], inner_edge]
             self.nodes[tidx[i]] = U.reorder_edges(U_reshape_edges)
             inner_edge = s[0]
@@ -277,12 +276,153 @@ class MPO(TensorNetwork):
         
         return np.array(output)
 
-
     def calc_trace(self):
         left_tensor = oe.contract("aacd->cd", self.nodes[0].tensor)
         for i in range(1, self.n):
             left_tensor = oe.contract("ec,aacd->ed", left_tensor, self.nodes[i].tensor)
         return left_tensor
+
+    def apply_MPO(self, tidx, mpo, is_truncate=False, is_normalize=False):
+        """ apply MPO
+
+        Args:
+            tidx (List[int]) : list of qubit index we apply to.
+            mpo (MPO) : MPO tensornetwork.
+        """
+
+        if is_truncate:
+            raise NotImplementedError
+    
+        is_direction_right = False
+        if len(tidx) == 1:
+            is_direction_right = True
+        else:
+            if tidx[1] - tidx[0] == 1:
+                is_direction_right = True
+        for i in range(len(tidx)-1):
+            if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
+                raise ValueError("mpo must be applied in sequential to MPO")
+        
+        total_fidelity = 1.0
+
+        node_tensors = []
+
+        # contract
+        for i, node in enumerate(mpo.nodes):
+            if i == 0:
+                if is_direction_right:
+                    if node[2].dimension != 1 and not self.nodes[tidx[i]][2].is_dangling():
+                        raise ValueError("MPO has non-dim1 dangling edge at the first edge")
+                else:
+                    if node[2].dimension != 1 and not self.nodes[tidx[i]][3].is_dangling():
+                        raise ValueError("MPO has non-dim1 dangling edge at the first edge")
+            elif i == len(tidx) - 1:
+                if is_direction_right:
+                    if node[3].dimension != 1 and not self.nodes[tidx[i]][3].is_dangling():
+                        raise ValueError("MPO has non-dim1 dangling edge at the final edge")
+                else:
+                    if node[3].dimension != 1 and not self.nodes[tidx[i]][2].is_dangling():
+                        raise ValueError("MPO has non-dim1 dangling edge at the final edge")
+
+            if is_direction_right:
+                phys_dim = node[0].dimension
+                conj_dim = self.nodes[tidx[i]][1].dimension
+                left_dim = node[2].dimension * self.nodes[tidx[i]][2].dimension
+                right_dim = node[3].dimension * self.nodes[tidx[i]][3].dimension
+                node_tensors.append(oe.contract("abcd,befg->aefcgd",node.tensor,self.nodes[tidx[i]].tensor).reshape(phys_dim, conj_dim, left_dim, right_dim))
+            else:
+                phys_dim = node[0].dimension
+                conj_dim = self.nodes[tidx[i]][1].dimension
+                left_dim = node[3].dimension * self.nodes[tidx[i]][2].dimension
+                right_dim = node[2].dimension * self.nodes[tidx[i]][3].dimension
+                node_tensors.append(oe.contract("abcd,befg->aefdgc",node.tensor,self.nodes[tidx[i]].tensor).reshape(phys_dim, conj_dim, left_dim, right_dim))
+
+        for i, t in enumerate(tidx):
+            self.nodes[t].tensor = node_tensors[i]
+
+        if is_normalize:
+            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / self.calc_trace().flatten()[0]
+        
+        return total_fidelity
+
+    def apply_MPO_as_CPTP(self, tidx, mpo, is_truncate=False, is_normalize=False, is_dangling_final=False):
+        """ apply MPO as CPTP map
+
+        Args:
+            tidx (List[int]) : list of qubit index we apply to.
+            mpo (MPO) : MPO tensornetwork. Note that the dimension of first dangling edge must be one
+            is_truncate (bool) : truncate via canonical form or not
+            is_normalize (bool) : normalize the final state or not
+            is_dangling_final (bool) : absorb final dangling edge of mpo or not
+        """
+
+        if is_truncate:
+            raise NotImplementedError
+    
+        is_direction_right = False
+        if len(tidx) == 1:
+            is_direction_right = True
+        else:
+            if tidx[1] - tidx[0] == 1:
+                is_direction_right = True
+        for i in range(len(tidx)-1):
+            if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
+                raise ValueError("mpo must be applied in sequential to MPO")
+        
+        total_fidelity = 1.0
+
+        node_tensors = []
+
+        # contract
+        for i, node in enumerate(mpo.nodes):
+            if i == 0:
+                if is_direction_right:
+                    if node[2].dimension != 1:
+                        raise ValueError("MPO has non-dim1 dangling edge at the first edge")
+                else:
+                    if node[2].dimension != 1:
+                        raise ValueError("MPO has non-dim1 dangling edge at the first edge")
+            elif i == len(tidx) - 1 and is_dangling_final:
+                if is_direction_right:
+                    if node[3].dimension != 1 and not self.nodes[tidx[i]][3].is_dangling():
+                        raise ValueError("MPO has non-dim1 dangling edge at the final edge")
+                else:
+                    if node[3].dimension != 1 and not self.nodes[tidx[i]][2].is_dangling():
+                        raise ValueError("MPO has non-dim1 dangling edge at the final edge")
+
+            if i != len(tidx) - 1 or is_dangling_final:
+                if is_direction_right:
+                    phys_dim = conj_dim = node[0].dimension
+                    left_dim = node[2].dimension * node[2].dimension * self.nodes[tidx[i]][2].dimension
+                    right_dim = node[3].dimension * node[3].dimension * self.nodes[tidx[i]][3].dimension
+                    node_tensors.append(oe.contract("abcd,befg,heij->ahfcigdj",node.tensor,self.nodes[tidx[i]].tensor,node.tensor.conj()).reshape(phys_dim, conj_dim, left_dim, right_dim))
+                else:
+                    phys_dim = node[0].dimension
+                    conj_dim = self.nodes[tidx[i]][1].dimension
+                    left_dim = node[3].dimension * node[3].dimension * self.nodes[tidx[i]][2].dimension
+                    right_dim = node[2].dimension * node[2].dimension * self.nodes[tidx[i]][3].dimension
+                    node_tensors.append(oe.contract("abdc,befg,heji->ahfcigdj",node.tensor,self.nodes[tidx[i]].tensor,node.tensor.conj()).reshape(phys_dim, conj_dim, left_dim, right_dim))
+            else:
+                if is_direction_right:
+                    phys_dim = conj_dim = node[0].dimension
+                    left_dim = node[2].dimension * node[2].dimension * self.nodes[tidx[i]][2].dimension
+                    right_dim = self.nodes[tidx[i]][3].dimension
+                    node_tensors.append(oe.contract("abcd,befg,heid->ahfcig",node.tensor,self.nodes[tidx[i]].tensor,node.tensor.conj()).reshape(phys_dim, conj_dim, left_dim, right_dim))
+                else:
+                    phys_dim = node[0].dimension
+                    conj_dim = self.nodes[tidx[i]][1].dimension
+                    left_dim = self.nodes[tidx[i]][2].dimension
+                    right_dim = node[2].dimension * node[2].dimension * self.nodes[tidx[i]][3].dimension
+                    node_tensors.append(oe.contract("abdc,befg,hejc->ahfgdj",node.tensor,self.nodes[tidx[i]].tensor,node.tensor.conj()).reshape(phys_dim, conj_dim, left_dim, right_dim))
+
+
+        for i, t in enumerate(tidx):
+            self.nodes[t].tensor = node_tensors[i]
+
+        if is_normalize:
+            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / self.calc_trace().flatten()[0]
+        
+        return total_fidelity
 
 
     def __move_right_canonical(self):

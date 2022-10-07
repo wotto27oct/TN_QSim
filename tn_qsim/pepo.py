@@ -23,10 +23,10 @@ class PEPO(TensorNetwork):
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
         truncate_dim (int) : truncation dim of virtual bond, default None
-        threthold_err (float) : the err threthold of singular values we keep
+        threshold_err (float) : the err threshold of singular values we keep
     """
 
-    def __init__(self, tensors, height, width, truncate_dim=None, threthold_err=None, bmps_truncate_dim=None):
+    def __init__(self, tensors, height, width, truncate_dim=None, threshold_err=None, bmps_truncate_dim=None):
         self.n = len(tensors)
         self.height = height
         self.width = width
@@ -39,7 +39,7 @@ class PEPO(TensorNetwork):
                 edge_info.append([i, i+self.n, 2*self.n+w*(self.height+1)+h, buff+h*(self.width+1)+w+1, 2*self.n+w*(self.height+1)+h+1, buff+h*(self.width+1)+w])
         super().__init__(edge_info, tensors)
         self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
+        self.threshold_err = threshold_err
         self.bmps_truncate_dim = bmps_truncate_dim
         self.tree, self.trace_tree, self.pepo_trace_tree = None, None, None
 
@@ -220,7 +220,7 @@ class PEPO(TensorNetwork):
         
         return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
     
-    def calc_pepo_trace_by_BMPS(self, pepo, truncate_dim=None, threthold=None):
+    def calc_pepo_trace_by_BMPS(self, pepo, truncate_dim=None, threshold=None):
         # contract inner and physical dim
         peps_tensors = []
         for idx in range(self.n):
@@ -241,7 +241,7 @@ class PEPO(TensorNetwork):
             else:
                 mps_tensors.append(tensor.reshape(shape[0],shape[1],shape[3]).transpose(0,2,1))
 
-        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threthold_err=1.0-threthold)
+        mps = MPS(mps_tensors, truncate_dim=truncate_dim, threshold_err=1.0-threshold)
         mps.canonicalization()
 
         total_fid = 1.0
