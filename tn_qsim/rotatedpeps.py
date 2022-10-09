@@ -22,10 +22,10 @@ class rotatedPEPS(TensorNetwork):
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
         truncate_dim (int) : truncation dim of virtual bond, default None
-        threthold_err (float) : the err threthold of singular values we keep
+        threshold_err (float) : the err threshold of singular values we keep
     """
 
-    def __init__(self, tensors, height, width, truncate_dim=None, threthold_err=None, bmps_truncate_dim=None):
+    def __init__(self, tensors, height, width, truncate_dim=None, threshold_err=None, bmps_truncate_dim=None):
         self.n = len(tensors)
         self.height = height
         self.width = width
@@ -45,7 +45,7 @@ class rotatedPEPS(TensorNetwork):
         print(edge_info)
         super().__init__(edge_info, tensors)
         self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
+        self.threshold_err = threshold_err
         self.bmps_truncate_dim = bmps_truncate_dim
         self.inner_tree = None
 
@@ -680,7 +680,7 @@ class rotatedPEPS(TensorNetwork):
         return tree, cost, sp_cost
 
 
-    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threthold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False, calc_lim=None):
+    def find_optimal_truncation(self, trun_node_idx, min_truncate_dim=None, max_truncate_dim=None, truncate_buff=None, threshold=None, trials=None, gauge=False, algorithm=None, tnq=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS", visualize=False, calc_lim=None):
         """truncate the specified index using FET method
 
         Args:
@@ -715,7 +715,7 @@ class rotatedPEPS(TensorNetwork):
 
         U, Vh, Fid = None, None, 1.0
         truncate_dim = None
-        if threthold is not None:
+        if threshold is not None:
             for cur_truncate_dim in range(min_truncate_dim, max_truncate_dim+1, truncate_buff):
                 if cur_truncate_dim == Gamma.shape[0]:
                     print("no truncation done")
@@ -726,19 +726,19 @@ class rotatedPEPS(TensorNetwork):
                     U, Vh, Fid = self.fix_gauge_and_find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, gpu=gpu, visualize=visualize)
                 
                 truncate_dim = cur_truncate_dim
-                if Fid > threthold:
+                if Fid > threshold:
                     break
         print(f"truncate dim: {truncate_dim}")
 
-        """# truncate while Fid < threthold
+        """# truncate while Fid < threshold
         if truncate_dim is None:
             truncate_dim = 1
         U, Vh, Fid = None, None, 1.0
         nU, nVh, nFid = None, None, 1.0
-        if threthold is not None:
+        if threshold is not None:
             for cur_truncate_dim in range(Gamma.shape[0] - 1, truncate_dim-1, -1):
                 nU, nVh, nFid = self.find_optimal_truncation_by_Gamma(Gamma, cur_truncate_dim, trials, visualize=visualize)
-                if nFid < threthold:
+                if nFid < threshold:
                     truncate_dim = cur_truncate_dim + 1
                     break
                 U, Vh, Fid = nU, nVh, nFid

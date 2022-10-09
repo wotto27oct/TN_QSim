@@ -19,7 +19,7 @@ class MPDO(TensorNetwork):
         truncate_dim (int) : truncation dim of virtual bond, default None
     """
 
-    def __init__(self, tensors, truncate_dim=None, threthold_err=None):
+    def __init__(self, tensors, truncate_dim=None, threshold_err=None):
         self.n = len(tensors)
         edge_info = []
         for i in range(self.n):
@@ -27,7 +27,7 @@ class MPDO(TensorNetwork):
         super().__init__(edge_info, tensors)
         self.apex = None
         self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
+        self.threshold_err = threshold_err
 
 
     @property

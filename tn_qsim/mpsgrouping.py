@@ -18,10 +18,10 @@ class MPSgrouping(TensorNetwork):
         edges (list of tn.Edge) : the list of each edge connected to each tensor
         nodes (list of tn.Node) : the list of each tensor
         truncate_dim (int) : truncation dim of virtual bond, default None
-        threthold_err (float) : the err threthold of singular values we keep
+        threshold_err (float) : the err threshold of singular values we keep
     """
 
-    def __init__(self, tensors, truncate_dim=None, threthold_err=None):
+    def __init__(self, tensors, truncate_dim=None, threshold_err=None):
         self.n = len(tensors)
         self.qnum = 0
         for tensor in tensors:
@@ -35,7 +35,7 @@ class MPSgrouping(TensorNetwork):
         super().__init__(edge_info, tensors)
         self.apex = None
         self.truncate_dim = truncate_dim
-        self.threthold_err = threthold_err
+        self.threshold_err = threshold_err
 
     @property
     def virtual_dims(self):

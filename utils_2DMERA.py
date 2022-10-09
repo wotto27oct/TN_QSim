@@ -365,6 +365,7 @@ def calc_reduced_rho(U_var, V_var, W_var, psi_var, tdim_list, inv_renormalize_fu
     bdim = tdim_list[-1]
     psi_renorm = tf.reshape(psi_var_c, (bdim, bdim, bdim, bdim))
     rho_renorm = oe.contract("abcd,efgh->abcdefgh",tf.math.conj(psi_renorm), psi_renorm, backend="tensorflow")
+
     symm_list = [(0,2,1,3,4,6,5,7),(1,3,0,2,5,7,4,6),(1,0,3,2,5,4,7,6),
                 (2,3,0,1,6,7,4,5),(2,0,3,1,6,4,7,5),(3,1,2,0,7,5,6,4),(3,2,1,0,7,6,5,4)]
     rho_renorm_symm = rho_renorm / 8.0
