@@ -36,19 +36,19 @@ class MPO(TensorNetwork):
             virtual_dims.append(self.nodes[i].get_dimension(3))
         return virtual_dims
 
-
-    def canonicalization(self):
+    def canonicalization(self, threshold=1.0):
         """canonicalize MPO
-        apex point = self.0
+        apex point is set to be self.0
 
+        Args:
+            threshold (float) : truncation threshold for svd
         """
         self.apex = 0
         for i in range(self.n-1):
-            self.__move_right_canonical()
+            self.__move_right_canonical(threshold)
         for i in range(self.n-1):
-            self.__move_left_canonical()
+            self.__move_left_canonical(threshold)
 
-    
     def contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
         output_edge_order = [cp_nodes[0][2], cp_nodes[self.n-1][3]]
@@ -153,7 +153,6 @@ class MPO(TensorNetwork):
         self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / self.calc_trace().flatten()[0]
         
         return total_fidelity
-
 
     def apply_CPTP(self, tidx, gtensor):
         """ apply nqubit gate
@@ -282,6 +281,21 @@ class MPO(TensorNetwork):
             left_tensor = oe.contract("ec,aacd->ed", left_tensor, self.nodes[i].tensor)
         return left_tensor
 
+    def amplitude(self, tensors):
+        """Caluculate one amplitude of MPO
+
+        Args:
+            tensors (List[np.array]) : the amplitude tensor, (0-phys,...,(n-1)-phys,0-conj,...,(n-1)-conj)
+        
+        Returns:
+            np.array : result amplitude
+        """
+
+        left_tensor = oe.contract("abcd,a,b->cd", self.nodes[0].tensor, tensors[0], tensors[self.n])
+        for i in range(1, self.n):
+            left_tensor = oe.contract("ec,abcd,a,b->ed", left_tensor, self.nodes[i].tensor, tensors[i], tensors[self.n+i])
+        return left_tensor
+
     def apply_MPO(self, tidx, mpo, is_truncate=False, is_normalize=False):
         """ apply MPO
 
@@ -341,7 +355,27 @@ class MPO(TensorNetwork):
             self.nodes[t].tensor = node_tensors[i]
 
         if is_normalize:
-            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / self.calc_trace().flatten()[0]
+            trace = self.calc_trace() # must be 2D array
+            if trace.shape[0] != 1:
+                if trace.shape[0] == 4:
+                    # connect with bell-pair
+                    bell = np.array([1, 0, 0, 1]) / 2
+                    trace = oe.contract("ab,a->b", trace, bell)
+                else:
+                    print("Error! trace of the MPO seems to be strange (cannnot calculated)")
+            else:
+                trace = trace[0]
+            if trace.shape[0] != 1:
+                if trace.shape[0] == 4:
+                    # connect with bell-pair
+                    bell = np.array([1, 0, 0, 1]) / 2
+                    trace = oe.contract("a,a", trace, bell)
+                else:
+                    print("Error! trace of the MPO seems to be strange (cannnot calculated)")
+            else:
+                trace = trace[0]
+
+            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / trace
         
         return total_fidelity
 
@@ -420,19 +454,39 @@ class MPO(TensorNetwork):
             self.nodes[t].tensor = node_tensors[i]
 
         if is_normalize:
-            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / self.calc_trace().flatten()[0]
+            trace = self.calc_trace() # must be 2D array
+            if trace.shape[0] != 1:
+                if trace.shape[0] == 4:
+                    # connect with bell-pair
+                    bell = np.array([1, 0, 0, 1]) / 2
+                    trace = oe.contract("ab,a->b", trace, bell)
+                else:
+                    print("Error! trace of the MPO seems to be strange (cannnot calculated)")
+            else:
+                trace = trace[0]
+            if trace.shape[0] != 1:
+                if trace.shape[0] == 4:
+                    # connect with bell-pair
+                    bell = np.array([1, 0, 0, 1]) / 2
+                    trace = oe.contract("a,a", trace, bell)
+                else:
+                    print("Error! trace of the MPO seems to be strange (cannnot calculated)")
+            else:
+                trace = trace[0]
+
+            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / trace
         
         return total_fidelity
 
 
-    def __move_right_canonical(self):
+    def __move_right_canonical(self, threshold=1.0):
         """ move canonical apex to right
         """
         if self.apex == self.n-1:
             raise ValueError("can't move canonical apex to right")
         l_edges = self.nodes[self.apex].get_all_edges()
         r_edges = self.nodes[self.apex+1].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]])
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]], max_truncation_err=1-threshold)
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], l_edges[2], s[0]])
         self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh, self.nodes[self.apex+1]], output_edge_order=[r_edges[0], r_edges[1], s[0], r_edges[3]])
 
@@ -443,14 +497,14 @@ class MPO(TensorNetwork):
         self.apex = self.apex + 1
 
 
-    def __move_left_canonical(self):
+    def __move_left_canonical(self, threshold=1.0):
         """ move canonical apex to right
         """
         if self.apex == 0:
             raise ValueError("can't move canonical apex to left")
         l_edges = self.nodes[self.apex-1].get_all_edges()
         r_edges = self.nodes[self.apex].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]])
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]], max_truncation_err=1-threshold)
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], r_edges[1], s[1], r_edges[3]])
         self.nodes[self.apex-1] = tn.contractors.optimal([self.nodes[self.apex-1], U, s], output_edge_order=[l_edges[0], l_edges[1], l_edges[2], s[1]])
 

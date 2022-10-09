@@ -96,7 +96,7 @@ def test_apply_mpo_as_CPTP_inverse_direction_without_truncation():
     E = np.random.randn(2,2,6,5) + 1j*np.random.randn(2,2,6,5)
     mpo2 = MPO([D, E])
 
-    mpo.apply_MPO_as_CPTP([1, 0], mpo2)
+    mpo.apply_MPO_as_CPTP([1, 0], mpo2, is_dangling_final=True)
     rho = mpo.contract().reshape(-1,2**3,2**3)
     rhot = oe.contract("efgd,abdc,bhij,fkjl,mnlo,sktr,phrq->icqogtaempsn",D,E,A,B,C,D.conj(),E.conj()).reshape(-1,2**3,2**3)
     assert_allclose(rho, rhot)
@@ -122,3 +122,37 @@ def test_simulate_by_apply_mpo_as_CPTP():
     rho2 = oe.contract("i,j->ij",state,state.conj())
 
     assert_allclose(rho, rho2)
+
+def test_amplitude():
+    zero = np.array([1, 0])
+    one = np.array([0, 1])
+    A = np.random.randn(2,2,1,10)
+    B = np.random.randn(2,2,10,20)
+    C = np.random.randn(2,2,20,1)
+    mpo = MPO([A, B, C])
+    rho = mpo.contract().reshape(2,2,2,2,2,2)
+
+    amplitude_list = [[0,1,1], [1,0,0]]
+    for amp in amplitude_list:
+        tensors = []
+        rhotmp = rho
+        for m in amp:
+            if m:
+                tensors.append(one)
+                rhotmp = rhotmp[1]
+            else:
+                tensors.append(zero)
+                rhotmp = rhotmp[0]
+        for m in amp:
+            if m:
+                tensors.append(one)
+                rhotmp = rhotmp[1]
+            else:
+                tensors.append(zero)
+                rhotmp = rhotmp[0]
+        amplitude = mpo.amplitude(tensors).item()
+
+        print(amplitude, rhotmp)
+        true_amplitude = rhotmp.flatten().item()
+
+        assert_allclose(amplitude, true_amplitude)
