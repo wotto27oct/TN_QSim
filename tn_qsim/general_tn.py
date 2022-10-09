@@ -8,13 +8,9 @@ from itertools import chain
 from cotengra.core import ContractionTree
 from tn_qsim.utils import from_nodes_to_str
 import jax
-import cupy as cp
 from concurrent.futures import ThreadPoolExecutor
-from jax.interpreters import xla
 import functools
 from tn_qsim.utils import from_tn_to_quimb
-import time
-#import cupy as cp
 
 class TensorNetwork():
     """base class of Tensor Network
@@ -55,23 +51,6 @@ class TensorNetwork():
                 else:
                     edge_list[edges[i][j]] = [i, j, False]
                     node_edges[j].set_name(f"edge {edges[i][j]}")
-
-
-    def contract_old(self, output_edge_order=None):
-        """contract the whole Tensor Network destructively
-
-        Args:
-            output_edge_order (list of tn.Edge) : the order of output edge
-        
-        Returns:
-            np.array: tensor after contraction
-        """
-
-        if output_edge_order == None:
-            return tn.contractors.auto(self.nodes, ignore_edge_order=True).tensor
-
-        return tn.contractors.auto(self.nodes, output_edge_order=output_edge_order).tensor
-
     
     def prepare_contract(self, output_edge_list):
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -82,19 +61,17 @@ class TensorNetwork():
 
         return node_list, output_edge_order
 
-
     def find_contraction_tree(self, output_edge_list, algorithm=None, seq="ADCRS", visualize=False):
         """contract the whole Tensor Network
 
         Args:
-            output_edge_order (list of list of int) : [node, edge_idx],...
+            output_edge_order (List[List[Int]]) : [node, edge_idx],...
         
         Returns:
             np.array: tensor after contraction
         """
         
         node_list, output_edge_order = self.prepare_contract(output_edge_list)
-
         tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
 
         if visualize:
@@ -102,13 +79,12 @@ class TensorNetwork():
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
 
-    
     def contract(self, output_edge_list, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """contract MERA and generate full state
 
         Args:
+            output_edge_order (List[List[Int]]) : [node, edge_idx],...
             algorithm : the algorithm to find contraction path
-
         Returns:
             np.array: tensor after contraction
         """
@@ -118,7 +94,6 @@ class TensorNetwork():
             tn, _ = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
-
 
     def visualize_tree(self, tree, node_list, output_edge_order=None, path=None, visualize=False):
         """calc contraction cost and visualize contract path for given tree and nodes
@@ -282,7 +257,7 @@ class TensorNetwork():
             tree = ContractionTree.from_path(inputs, output, size_dict, path=path)
         else:
             tree = algorithm.search(inputs, output, size_dict)
-            path = tree.path()
+            path = tree.get_path()
 
         einsum_str_list, contract_einsum_str_list, edge_alpha_dims, cost_list, total_cost, sp_cost_list, max_sp_cost = self.visualize_tree(tree, node_list, output_edge_order, visualize=visualize)
 
@@ -392,6 +367,7 @@ class TensorNetwork():
                 x = tree_s.gather_slices(slices, progbar=False)
                 return x
         elif backend == "cupy":
+            import cupy as cp
             if precision == "complex128":
                 arrays = [cp.array(tensor.data, dtype=np.complex128) for tensor in tn.tensors]
             else:
