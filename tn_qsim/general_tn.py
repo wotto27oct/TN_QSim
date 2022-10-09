@@ -392,15 +392,14 @@ class TensorNetwork():
                 x = tree_s.gather_slices(slices, progbar=False)
                 return x
         elif backend == "cupy":
+            import cupy as cp
             if precision == "complex128":
                 arrays = [cp.array(tensor.data, dtype=np.complex128) for tensor in tn.tensors]
             else:
                 arrays = [cp.array(tensor.data, dtype=np.complex64) for tensor in tn.tensors]
             # use jax to use jit and GPU
             pool = ThreadPoolExecutor(1)
-
             contract_core = functools.partial(tree_s.contract_core, backend="cupy")
-
             fs = [
                 pool.submit(contract_core, tree_s.slice_arrays(arrays, i))
                 for i in range(tree_s.nslices)
