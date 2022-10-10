@@ -15,9 +15,9 @@ class TN3D(TensorNetwork):
 
     Attributes:
         n (int) : the number of tensors
-        nodes (list of tn.Node) : the list of each tensor
-        top_nodes (list of tn.Node) : the list of top nodes for each qubits
-        top_edges (list of (int, int)) : the list of top edges, (node_idx, edge_idx of node)
+        nodes (list[tn.Node]) : the list of each tensor
+        top_nodes (list[tn.Node]) : the list of top nodes for each qubits
+        top_edges (list[tuple[int, int]] : the list of top edges, (node_idx, edge_idx of node)
     """
 
     def __init__(self, tensors, n):
@@ -27,7 +27,6 @@ class TN3D(TensorNetwork):
         self.top_edges = [(i, 0) for i in range(self.n)]
     
     def prepare_amplitude(self, tensors):
-        #cp_nodes = tn.replicate_nodes(self.past_nodes + self.top_nodes)
         cp_nodes = tn.replicate_nodes(self.nodes)
 
         node_list = [node for node in cp_nodes]
@@ -49,7 +48,7 @@ class TN3D(TensorNetwork):
         """contract amplitude with given product states by using quimb (typically computational basis)
 
         Args:
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            tensors (list[np.array]) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
         Returns:
@@ -70,7 +69,7 @@ class TN3D(TensorNetwork):
         """contract amplitude with given product states by using quimb (typically computational basis)
 
         Args:
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            tensors (list[np.array]) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
         Returns:
@@ -88,7 +87,7 @@ class TN3D(TensorNetwork):
         """ apply MPO
         
         Args:
-            tidx (list of int) : list of qubit index we apply to.
+            tidx (list[int]) : list of qubit index we apply to.
             mpo (MPO) : MPO tensornetwork.
         """
 

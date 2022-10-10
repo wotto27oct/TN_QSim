@@ -17,17 +17,16 @@ class TensorNetwork():
 
     Attributes:
         n (int) : the number of tensors
-        edges (list of tn.Edge) : the list of each edge connected to each tensor
-        nodes (list of tn.Node) : the list of each tensor
+        edges (list[tn.Edge]) : the list of each edge connected to each tensor
+        nodes (list[tn.Node]) : the list of each tensor
 
     """
 
     def __init__(self, edges, tensors):
         """initialization of Tensor Network
         Args:
-            edges (list of list of int): the orderd indexes of each edge connected to each tensor
-            tensors (list of np.array) : each tensor
-
+            edges (list[list[int]]): the orderd indexes of each edge connected to each tensor
+            tensors (list[np.array]) : each tensor
         """
         self.n = len(tensors)
         if len(edges) != self.n:
@@ -65,7 +64,7 @@ class TensorNetwork():
         """contract the whole Tensor Network
 
         Args:
-            output_edge_order (List[List[Int]]) : [node, edge_idx],...
+            output_edge_order (list[list[int]]) : [node, edge_idx],...
         
         Returns:
             np.array: tensor after contraction
@@ -83,7 +82,7 @@ class TensorNetwork():
         """contract MERA and generate full state
 
         Args:
-            output_edge_order (List[List[Int]]) : [node, edge_idx],...
+            output_edge_order (list[list[int]]) : [node, edge_idx],...
             algorithm : the algorithm to find contraction path
         Returns:
             np.array: tensor after contraction
@@ -100,10 +99,10 @@ class TensorNetwork():
 
         Args:
             tree (ctg.ContractionTree) : the contraction tree
-            node_list (list of tn.Node) : the nodes contracted
-            output_edge_order (list of tn.Edge) : the order of output edge
-            path (list of tuple of int) : the contraction path. If tree is None, this is converted to the tree
-            visualize (bool) : if or not visualize contraction process
+            node_list (list[tn.Node]) : the nodes contracted
+            output_edge_order (list[tn.Edge]) : the order of output edge
+            path (list[Tuple[int]]) : the contraction path. If tree is None, this is converted to the tree
+            visualize (Bool) : if or not visualize contraction process
         
         Returns:
             total_cost (int) : the total contraction cost
@@ -230,8 +229,8 @@ class TensorNetwork():
         """calc contract path for given input and algorithm
 
         Args:
-            node_list (list of tn.Node) : the nodes contracted
-            output_edge_order (list of tn.Edge) : the order of output edge
+            node_list (list[tn.Node]) : the nodes contracted
+            output_edge_order (list[tn.Edge]) : the order of output edge
             algorithm : the algorithm to find contraction path
             memory_limit (int) : memory limit, default 2**28
             visualize (bool) : if or not visualize contraction process
@@ -286,22 +285,25 @@ class TensorNetwork():
             tree.sliced_inds = ""
             return tnq, tree
         tree = tnq.contraction_tree(optimize=algorithm, output_inds=output_inds)
-        # print(tree.path())
         if visualize:
             print(f"after simplification  |V|: {tnq.num_tensors}, |E|: {tnq.num_indices}")
             print(f"slice: {tree.sliced_inds} tree cost: {tree.total_flops():,}, sp_cost: {tree.max_size():,}, log2_FLOP: {np.log2(tree.total_flops()):.4g} tree_width: {tree.contraction_width()}".encode("utf-8").strip())
         return tnq, tree
 
     def contract_tree_by_quimb(self, tn, algorithm=None, tree=None, output_inds=None, target_size=None, gpu=True, thread=1, seq="ADCRS", backend="jax", precision="complex64", is_visualize=False):   
-        """execute contraction for given input and algorithm or tree
+        """execute contraction for given input and algorithm or tree using quimb
 
         Args:
             tn (quimb.tensor.TensorNetwork) : tn we contract by quimb
             output_inds (str) : output index ordering, if tree == None
             algorithm : the algorithm to find contraction path
             target_size : the target size we slice
-            
-        
+            gpu (bool) : if Tuue, use gpu to contract
+            thread (int) : the number of thread of the number of gpu to contract
+            seq (str) : string to specify the type of simplification for quimb
+            backend (str) : the backend to contract
+
+
         Returns:
             np.array: the tensor after contraction
         """
@@ -312,12 +314,7 @@ class TensorNetwork():
             if tn.tensors[0].ndim == 0:
                 return tn.tensors[0].data
             else:
-                #print("contract or reshape")
-                #print(output_inds)
                 inputs, output, _ = tn.get_inputs_output_size_dict(output_inds=output_inds)
-                #print(inputs, output)
-                #print(inputs[0] + "->" + output)
-                #print(tn.tensors[0].shape)
                 return np.einsum(inputs[0] + "->" + output, tn.tensors[0].data)
         tree_s = tree
         if target_size is not None:
@@ -354,8 +351,7 @@ class TensorNetwork():
                     if is_visualize:
                         print(f"{t}th parallel")
                     end_thread = tree_s.nslices if tree_s.nslices < (t+1)*thread else (t+1)*thread
-                    #pool = ThreadPoolExecutor(end_thread - t*thread) if tree_s.nslices < (t+1)*thread else ThreadPoolExecutor(thread)
-                    pool = ThreadPoolExecutor(1)
+                    pool = ThreadPoolExecutor(end_thread - t*thread) if tree_s.nslices < (t+1)*thread else ThreadPoolExecutor(thread)
 
                     fs = [
                         pool.submit(contract_core_jit, tree_s.slice_arrays(arrays, i))
@@ -444,127 +440,6 @@ class TensorNetwork():
             for node in node_list:
                 node.tensor = None
             return result
-
-    
-    """def fix_gauge_and_find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, threshold=None, visualize=False):
-        find optimal truncation U, Vh given Gamma and trun_dim
-        Args:
-            Gamma (np.array) : env-tensor Gamma_iIjJ
-            turncate_dim (int) : target bond dimension
-            trials (int) : the number of iteration
-            visualize (bool) : print or not
-        Returns:
-            U (np.array) : left gauge tensor after optimization, shape (bond, trun)
-            Vh (np.array) : right gauge tensor after optimization, shape (trun, bond)
-        
-        bond_dim = Gamma.shape[0]
-        trun_dim = truncate_dim
-        if visualize:
-            print(f"bond: {bond_dim}, trun: {trun_dim}")
-
-        # fix gauge
-        # step 1
-        leig, leigv = np.linalg.eig(Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1))
-        asc_order = np.argsort(np.abs(leig))
-        lambda0 = leig[asc_order[-1]]
-        L0 = leigv[:,asc_order[-1]]
-        reig, reigv = np.linalg.eig(Gamma.reshape(Gamma.shape[0]*Gamma.shape[1], -1).T)
-        asc_order = np.argsort(np.abs(reig))
-        R0 = reigv[:,asc_order[-1]]
-
-        # step 2
-        L0 = L0 + 1e-10
-        R0 = R0 + 1e-10
-        ul, dl, ulh = np.linalg.svd(L0.reshape(Gamma.shape[0], -1), full_matrices=False)
-        ur, dr, urh = np.linalg.svd(R0.reshape(Gamma.shape[0], -1), full_matrices=False)
-
-        print(dl, dr)
-
-        # step 3
-        sigma_p = oe.contract("ab,bc,cd,de->ae",np.diag(np.sqrt(dl)),ul.conj().T,ur,np.diag(np.sqrt(dr)))
-        wl, sigma, wrh = np.linalg.svd(sigma_p, full_matrices=False)
-        print(sigma)
-        sigma = np.diag(sigma)
-        
-        # step 4
-        x = oe.contract("ab,bc,cd->ad",wl.conj().T,np.diag(np.sqrt(dl)),ul.conj().T)
-        y = oe.contract("ab,bc,cd->ad",ur,np.diag(np.sqrt(dr)),wrh.conj().T)
-        xinv = np.linalg.pinv(x)
-        yinv = np.linalg.pinv(y)
-
-        Gamma = oe.contract("iIjJ,ia,IA,bj,BJ->aAbB",Gamma,xinv,xinv.conj(),yinv,yinv.conj())
-
-        U, s, Vh = np.linalg.svd(sigma)
-        U = U[:,:trun_dim]
-        S = np.diag(s[:trun_dim])
-        Vh = Vh[:trun_dim, :]
-
-        truncated_s = np.diag(sigma)[trun_dim:]
-        if len(truncated_s[truncated_s>1e-9]) == 0:
-            # perfect truncation
-            Fid = 1.0
-            U = np.dot(xinv, np.dot(U, S))
-            Vh = np.dot(Vh, yinv)
-
-            return U, Vh, Fid
-
-        Fid = oe.contract("iIjJ,ij,IJ", Gamma, sigma, sigma)
-        if visualize:
-            print(f"Fid before truncation: {Fid}")
-
-        R = oe.contract("pq,qj->pj",S,Vh).flatten()
-        P = oe.contract("iIjJ,ij,IP->PJ",Gamma,sigma,U.conj()).flatten()
-        A = oe.contract("a,b->ab",P,P.conj())
-        B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-        Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-        if visualize:
-            print(f"Fid before optimization: {Fid}")
-            print(np.dot(R.conj(), np.dot(A, R)), np.dot(R.conj(), np.dot(B, R)))
-
-        for i in range(trials):
-            ## step1
-            R = oe.contract("pq,qj->pj",S,Vh).flatten()
-            P = oe.contract("iIjJ,ij,IP->PJ",Gamma,sigma,U.conj()).flatten()
-            A = oe.contract("a,b->ab",P,P.conj())
-            B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-
-            #Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-
-            Rmax = np.dot(np.linalg.pinv(B), P)
-            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
-            if visualize:
-                print(f"fid at trial {i} step1: {Fid}")
-
-            Utmp, stmp, Vh = np.linalg.svd(Rmax.reshape(trun_dim, -1), full_matrices=False)
-            S = np.dot(Utmp, np.diag(stmp))
-
-            ## step2
-            R = oe.contract("ip,pq->qi",U,S).flatten()
-            P = oe.contract("iIjJ,ij,QJ->QI",Gamma,sigma,Vh.conj()).flatten()
-            A = oe.contract("a,b->ab",P,P.conj())
-            B = oe.contract("iIjJ,qj,QJ->QIqi",Gamma,Vh,Vh.conj()).reshape(trun_dim*bond_dim, -1)
-
-            Rmax = np.dot(np.linalg.pinv(B), P)
-            Fid = np.dot(Rmax.conj(), np.dot(A, Rmax)) / np.dot(Rmax.conj(), np.dot(B, Rmax))
-            if visualize:
-                print(f"fid at trial {i} step2: {Fid}")
-
-            U, stmp, Vhtmp = np.linalg.svd(Rmax.reshape(trun_dim, -1).T, full_matrices=False)
-            S = np.dot(np.diag(stmp), Vhtmp)
-        
-        R = oe.contract("pq,qj->pj",S,Vh).flatten()
-        #P = oe.contract("iIjJ,ij,IP->PJ",Gamma,I,U.conj()).flatten()
-        P = oe.contract("iIjJ,ij,IP->PJ",Gamma,sigma,U.conj()).flatten()
-        A = oe.contract("a,b->ab",P,P.conj())
-        B = oe.contract("iIjJ,ip,IP->PJpj",Gamma,U,U.conj()).reshape(trun_dim*bond_dim, -1)
-        Fid = np.dot(R.conj(), np.dot(A, R)) / np.dot(R.conj(), np.dot(B, R))
-        print(Fid)
-        
-        U = np.dot(xinv, np.dot(U, S)) / np.sqrt(Fid)
-        Vh = np.dot(Vh, yinv)
-
-        return U, Vh, Fid"""
-
     
     def find_optimal_truncation_by_Gamma(self, Gamma, truncate_dim, trials=10, gpu=False, visualize=False):
         """find optimal truncation U, Vh given Gamma and trun_dim

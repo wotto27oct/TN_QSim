@@ -18,8 +18,8 @@ class MERA(TensorNetwork):
     Attributes:
         depth (int) : the depth of MERA, >=1
         n (int) : the number of tensors
-        edges (list of tn.Edge) : the list of each edge connected to each tensor
-        nodes (list of tn.Node) : the list of each tensor
+        edges (list[tn.Edge]) : the list of each edge connected to each tensor
+        nodes (list[tn.Node]) : the list of each tensor
     """
 
     def __init__(self, tensors, depth):
@@ -39,7 +39,6 @@ class MERA(TensorNetwork):
             for w in range(2**d):
                 edge_info.append([buff2+2*w+1,buff2+(2*w+2)%(2**(d+1)),buff+2*w+1,buff+(2*w+2)%(2**(d+1))])
         super().__init__(edge_info, tensors)
-
     
     def prepare_contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -62,12 +61,12 @@ class MERA(TensorNetwork):
         """contract contraction path by using quimb
 
         Args:
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            tensors (list[np.array]) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
         Returns:
-            tn (TensorNetwork) : tn for contract
-            tree (ContractionTree) : contraction tree for contract
+            tn (quimb.tensor.TensorNetwork) : tn for contract
+            tree (ctg.ContractionTree) : contraction tree for contract
         """
         
         node_list, output_edge_order = self.prepare_contract()
@@ -78,7 +77,6 @@ class MERA(TensorNetwork):
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
-
 
     def contract(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """contract MERA and generate full state
@@ -96,7 +94,6 @@ class MERA(TensorNetwork):
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
-
     def prepare_inner(self):
         node_list1, output_edge_order1 = self.prepare_contract()
         node_list2, output_edge_order2 = self.prepare_contract()
@@ -109,12 +106,10 @@ class MERA(TensorNetwork):
         node_list = node_list1 + node_list2
         return node_list, []
 
-
     def find_calc_inner(self, algorithm=None, seq="ADCRS", visualize=False):
         """find calc_inner contraction path by using quimb
 
         Args:
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
         Returns:
@@ -180,7 +175,6 @@ class MERA(TensorNetwork):
 
         Args:
             Arange (list of int) : the range of A
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
         Returns:
@@ -197,13 +191,11 @@ class MERA(TensorNetwork):
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
 
-
     def calc_second_renyi(self, Arange=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """contract contraction path by using quimb
 
         Args:
             Arange (int) : the range of A, [0, Arange-1]
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
         Returns:
@@ -216,7 +208,6 @@ class MERA(TensorNetwork):
             tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, output_inds, target_size, gpu, thread, seq)
-
     
     def prepare_foliation(self, cut_list):
         node_list, output_edge_order = self.prepare_inner()
@@ -234,12 +225,11 @@ class MERA(TensorNetwork):
 
         return node_list, output_edge_order
 
-
     def find_calc_foliation(self, cut_list, algorithm=None, seq="ADCRS", visualize=False):
         """find calc_foliation contraction path by using quimb
 
         Args:
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
+            cut_list (list[list[int]]) : the list to specify foliation of shape [node_idx1, edge_idx1, node_idx2, edge_idx2]
             algorithm : the algorithm to find contraction path
 
         Returns:
@@ -295,9 +285,6 @@ class MERA(TensorNetwork):
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
 
-        
-
-
     def calc_foliation(self, cut_list=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """calc foliation of MERA state
 
@@ -314,7 +301,6 @@ class MERA(TensorNetwork):
 
         return self.contract_tree_by_quimb(tn, algorithm, tree, None, target_size, gpu, thread, seq)
 
-    
     def prepare_grad_foliation(self, tidx, output_list):
         node_list1, output_edge_order1 = self.prepare_contract()
         node_list2, output_edge_order2 = self.prepare_contract()
@@ -333,12 +319,10 @@ class MERA(TensorNetwork):
 
         return node_list, output_edge_order
 
-
     def find_calc_grad_foliation(self, tidx, output_list, algorithm=None, seq="ADCRS", visualize=False):
         """find calc_foliation contraction path by using quimb
 
         Args:
-            tensors (list of np.array) : the amplitude index represented by the list of tensor
             algorithm : the algorithm to find contraction path
 
         Returns:
@@ -354,8 +338,7 @@ class MERA(TensorNetwork):
             print(f"before simplification  |V|: {tn.num_tensors}, |E|: {tn.num_indices}")
 
         return self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq=seq)
-
-
+    
     def calc_grad_foliation(self, tidx=None, output_list=None, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq=None):
         """calc foliation of MERA state
 

@@ -13,8 +13,8 @@ class MPS(TensorNetwork):
     Attributes:
         n (int) : the number of tensors
         apex (int) : apex point of canonical form
-        edges (list of tn.Edge) : the list of each edge connected to each tensor
-        nodes (list of tn.Node) : the list of each tensor
+        edges (list[tn.Edge]) : the list of each edge connected to each tensor
+        nodes (list[tn.Node]) : the list of each tensor
         truncate_dim (int) : truncation dim of virtual bond, default None
         threshold_err (float) : the err threshold of singular values we keep
     """
@@ -36,11 +36,9 @@ class MPS(TensorNetwork):
             virtual_dims.append(self.nodes[i].get_dimension(2))
         return virtual_dims
 
-
     def canonicalization(self):
         """canonicalize MPS
         apex point = self.0
-
         """
         self.apex = 0
         for i in range(self.n-1):
@@ -53,14 +51,12 @@ class MPS(TensorNetwork):
         for i in range(apex):
             self.__move_right_canonical()
 
-
     def contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
         output_edge_order = [cp_nodes[0][1], cp_nodes[self.n-1][2]]
         for i in range(self.n):
             output_edge_order.append(cp_nodes[i][0])
         return tn.contractors.auto(cp_nodes, output_edge_order=output_edge_order).tensor
-
 
     def prepare_inner(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -89,9 +85,8 @@ class MPS(TensorNetwork):
 
         return node_list, output_edge_order
 
-    
     def calc_inner(self, algorithm=None, tn=None, tree=None, target_size=None, gpu=True, thread=1, seq="ADCRS"):
-        """calc inner product of PEPS state
+        """calc inner product of MPS state
 
         Args:
             algorithm : the algorithm to find contraction path
@@ -109,7 +104,6 @@ class MPS(TensorNetwork):
             tn, output_inds = from_tn_to_quimb(node_list, output_edge_order)
         
         return self.contract_tree_by_quimb(tn, algorithm=algorithm, tree=tree, output_inds=output_inds, target_size=target_size, gpu=gpu, thread=thread, seq=seq)
-
 
     def find_inner_tree(self, algorithm=None, seq="ADCRS", visualize=False):
         """find contraction path of inner product of PEPS state
@@ -131,7 +125,6 @@ class MPS(TensorNetwork):
         tn, tree = self.find_contract_tree_by_quimb(tn, output_inds, algorithm, seq, visualize)
 
         return tn, tree
-
     
     def visualize_inner_tree(self, algorithm=None, memory_limit=None, tree=None, path=None, visualize=False):
         """find contraction path of inner product of PEPS state
@@ -339,7 +332,6 @@ class MPS(TensorNetwork):
         
         return total_fidelity
 
-
     def apply_MPO(self, tidx, mpo, is_normalize=True, last_dir=None, is_return_history=False):
         """ apply MPO
 
@@ -369,6 +361,15 @@ class MPS(TensorNetwork):
         
         dir = 2 if is_direction_right else 1
 
+        if self.nodes[tidx[0]][dir%2+1].is_dangling() and mpo.nodes[0][2].is_dangling():
+            flat_first_edge = True
+        else:
+            flat_first_edge = False
+        if self.nodes[tidx[-1]][dir].is_dangling() and mpo.nodes[-1][3].is_dangling():
+            flat_last_edge = True
+        else:
+            flat_last_edge = False
+
         total_fidelity = 1.0
             
         edge_list = []
@@ -378,28 +379,36 @@ class MPS(TensorNetwork):
             node = mpo.nodes[0]
             node_contract_list = [node, self.nodes[tidx[0]]]
             node_edge_list = [node[0]] + [self.nodes[tidx[0]][j] for j in range(1, 3)]
-            if last_dir is None:
+            if not flat_first_edge:
                 one = tn.Node(np.array([1]))
                 tn.connect(node[2], one[0])
                 node_contract_list.append(one)
+            else:
+                node_edge_list += [node[2]]
+            if not flat_last_edge:
                 one2 = tn.Node(np.array([1]))
                 tn.connect(node[3], one2[0])
                 node_contract_list.append(one2)
             else:
-                node_edge_list += [node[2], node[3]]
+                node_edge_list += [node[3]]
             tn.connect(node[1], self.nodes[tidx[0]][0])
             new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
-            if last_dir is not None:
-                # TODO: unit test
+            if flat_first_edge:
+                # 0, 1, 2 ,3, (4) -> 0, 2, (4), 13 -> 0, 13, 2, (4)
                 tn.flatten_edges([new_node[1], new_node[3]]) # left
-                tn.flatten_edges([new_node[1], new_node[2]]) # right
+                reorder_list = [0, len(new_node.edges)-1] + [j for j in range(1, len(new_node.edges)-1)]
+                new_node.reorder_edges([new_node[j] for j in reorder_list])
+            if flat_last_edge:
+                # 0, 1, 2, 3 -> 0, 1, 23
+                tn.flatten_edges([new_node[2], new_node[3]]) # right
+
             node_list.append(new_node)
         else:
             for i, node in enumerate(mpo.nodes):
                 if i == 0:
                     node_contract_list = [node, self.nodes[tidx[i]]]
                     node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 3)] + [node[3]]
-                    if last_dir is None:
+                    if not flat_first_edge:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[2], one[0])
                         node_contract_list.append(one)
@@ -407,10 +416,15 @@ class MPS(TensorNetwork):
                         node_edge_list.append(node[2])
                     tn.connect(node[1], self.nodes[tidx[i]][0])
                     new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
-                    if last_dir is not None:
-                        # flatten left edges, 0, 1, 2, 3, 4 -> 0, 2, 3, (1,4) -> 0, (1,4), 2, 3
-                        tn.flatten_edges([new_node[1], new_node[4]])
-                        reorder_list = [new_node[i] for i in [0,3,1,2]]
+                    if flat_first_edge:
+                        if is_direction_right:
+                            # flatten left edges, 0, 1, 2, 3, 4 -> 0, 2, 3, (1,4) -> 0, (1,4), 2, 3
+                            tn.flatten_edges([new_node[1], new_node[4]])
+                            reorder_list = [new_node[j] for j in [0,3,1,2]]
+                        else: # left
+                            # flatten right edges, 0, 1, 2, 3, 4 -> 0, 1, 3, (2,4) -> 0, 1, (2,4), 3
+                            tn.flatten_edges([new_node[2], new_node[4]])
+                            reorder_list = [new_node[j] for j in [0,1,3,2]]
                         new_node.reorder_edges(reorder_list)
                     node_list.append(new_node)
                     edge_list.append(node_edge_list)
@@ -434,13 +448,14 @@ class MPS(TensorNetwork):
                     # contract left_R, right_R, node
                     svd_node_edge_list = None
                     svd_node_list = [lR, rR, node]
-                    if i == mpo.n - 1 and last_dir is None:
+                    if i == mpo.n - 1 and not flat_last_edge:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[3], one[0])
                         svd_node_edge_list = [qr_left_edge, node[0], qr_right_edge]
                         svd_node_list.append(one)
                     else:
                         svd_node_edge_list = [qr_left_edge, node[0], node[3], qr_right_edge]
+                    
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
@@ -459,7 +474,7 @@ class MPS(TensorNetwork):
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     r_edge_order = None
-                    if i == mpo.n - 1 and last_dir is None:
+                    if i == mpo.n - 1 and not flat_last_edge:
                         if dir == 2: # right
                             r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]]
                         else:
@@ -470,12 +485,15 @@ class MPS(TensorNetwork):
                         else:
                             r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]] + [Vh[2]]
                     new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
-                    if i == mpo.n - 1 and last_dir is not None:
-                        if last_dir == 2: # right:
+                    if i == mpo.n - 1 and flat_last_edge:
+                        if is_direction_right:
+                            # 0, 1, 2, 3 -> 0, 1, 23
                             tn.flatten_edges([new_node[2], new_node[3]])
                         else:
-                            # TODO: unit test
-                            raise ValueError("not implemented yet")
+                            # 0, 1, 2, 3 -> 0, 2, (1,3) -> 0, (1,3), 2
+                            tn.flatten_edges([new_node[1], new_node[3]])
+                            new_node.reorder_edges([new_node[j] for j in [0,2,1]])
+
                     node_list.append(new_node)
                 
                 if is_return_history:
@@ -495,7 +513,6 @@ class MPS(TensorNetwork):
             return total_fidelity
         else:
             return total_fidelity, mps_list
-
 
     def sample(self, seed=0):
         """ sample from mps
@@ -521,7 +538,6 @@ class MPS(TensorNetwork):
         
         return np.array(output)
 
-
     def __move_right_canonical(self):
         """ move canonical apex to right
         """
@@ -538,7 +554,6 @@ class MPS(TensorNetwork):
         self.nodes[self.apex][2].set_name(f"edge {self.apex+self.n+1}")
 
         self.apex = self.apex + 1
-
     
     def __move_left_canonical(self):
         """ move canonical apex to right

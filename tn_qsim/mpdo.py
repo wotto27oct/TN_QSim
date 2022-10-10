@@ -29,7 +29,6 @@ class MPDO(TensorNetwork):
         self.truncate_dim = truncate_dim
         self.threshold_err = threshold_err
 
-
     @property
     def virtual_dims(self):
         virtual_dims = [self.nodes[0].get_dimension(1)]
@@ -37,14 +36,12 @@ class MPDO(TensorNetwork):
             virtual_dims.append(self.nodes[i].get_dimension(2))
         return virtual_dims
 
-
     @property
     def inner_dims(self):
         inner_dims = []
         for i in range(self.n):
             inner_dims.append(self.nodes[i].get_dimension(3))
         return inner_dims
-
 
     def canonicalization(self):
         """canonicalize MPDO
@@ -56,7 +53,6 @@ class MPDO(TensorNetwork):
             self.__move_right_canonical()
         for i in range(self.n-1):
             self.__move_left_canonical()
-
 
     def contract(self):
         """contract and generate density operator.

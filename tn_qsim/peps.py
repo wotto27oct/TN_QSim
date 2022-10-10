@@ -48,7 +48,6 @@ class PEPS(TensorNetwork):
         self.bmps_truncate_dim = bmps_truncate_dim
         self.inner_tree = None
 
-
     @property
     def vertical_virtual_dims(self):
         virtual_dims = []
