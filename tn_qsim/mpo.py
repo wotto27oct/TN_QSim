@@ -458,7 +458,7 @@ class MPO(TensorNetwork):
             if trace.shape[0] != 1:
                 if trace.shape[0] == 4:
                     # connect with bell-pair
-                    bell = np.array([1, 0, 0, 1]) / 2
+                    # bell = np.array([1, 0, 0, 1]) / 2
                     trace = oe.contract("ab,a->b", trace, bell)
                 else:
                     print("Error! trace of the MPO seems to be strange (cannnot calculated)")
@@ -486,7 +486,7 @@ class MPO(TensorNetwork):
             raise ValueError("can't move canonical apex to right")
         l_edges = self.nodes[self.apex].get_all_edges()
         r_edges = self.nodes[self.apex+1].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]], max_truncation_err=1-threshold)
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], l_edges[2], s[0]])
         self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh, self.nodes[self.apex+1]], output_edge_order=[r_edges[0], r_edges[1], s[0], r_edges[3]])
 
@@ -504,7 +504,7 @@ class MPO(TensorNetwork):
             raise ValueError("can't move canonical apex to left")
         l_edges = self.nodes[self.apex-1].get_all_edges()
         r_edges = self.nodes[self.apex].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]], max_truncation_err=1-threshold)
+        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], r_edges[1], s[1], r_edges[3]])
         self.nodes[self.apex-1] = tn.contractors.optimal([self.nodes[self.apex-1], U, s], output_edge_order=[l_edges[0], l_edges[1], l_edges[2], s[1]])
 

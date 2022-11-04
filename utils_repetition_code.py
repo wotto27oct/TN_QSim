@@ -1,20 +1,24 @@
+from re import I
 import numpy as np
 from tn_qsim.mpo import MPO
 from scipy.linalg import expm
+
+from get_kraus import *
 
 from jax.config import config
 config.update("jax_enable_x64", True)
 
 np.set_printoptions(linewidth=500)
 
-zero = np.array([1,0,0])
-one = np.array([0,1,0])
-two = np.array([0,0,1])
+zero = np.array([1,0,0]).astype(dtype=np.complex128)
+one = np.array([0,1,0]).astype(dtype=np.complex128)
+two = np.array([0,0,1]).astype(dtype=np.complex128)
 
 rzero = np.atleast_2d(zero).T @ np.atleast_2d(zero).conj()
 rone = np.atleast_2d(one).T @ np.atleast_2d(one).conj()
 rtwo = np.atleast_2d(two).T @ np.atleast_2d(two).conj()
 
+I = np.eye(3)
 X = np.array([[0,1,0],[1,0,0],[0,0,1]])
 Z = np.array([[1,0,0],[0,-1,0],[0,0,1]])
 Y = -1j*np.dot(X,Z)
@@ -56,6 +60,46 @@ def ADCP(p):
     K0, K1, K2 = AD(p)
     E = np.array([K0, K1, K2]).transpose(1,2,0).reshape(3,3,1,3)
     return E
+
+def DP(p):
+    K0 = np.sqrt(1-p) * I
+    K1 = np.sqrt(p/3) * X
+    K2 = np.sqrt(p/3) * Y
+    K3 = np.sqrt(p/3) * Z
+    return K0, K1, K2, K3
+
+def DPCP(p):
+    K0, K1, K2, K3 = DP(p)
+    assert np.allclose(np.dot(K0,K0.T.conj()) + np.dot(K1,K1.T.conj()) + np.dot(K2,K2.T.conj()) + np.dot(K3,K3.T.conj()), np.eye(3))
+    E = np.array([K0, K1, K2, K3]).transpose(1,2,0).reshape(3,3,1,4)
+    return E
+
+def krausCP(gamma):
+    gamma = gamma # in [MHz]
+    kbT_over_hw = 0.5 # kb T / hbar w [a.u.]
+    tau = 1.0 # in [us]
+    dim = 3
+    eps = 1e-13
+    kraus_list = get_kraus_list(gamma, kbT_over_hw, tau, dim, eps)
+    I = np.zeros((3, 3), dtype=np.complex128)
+    for K in kraus_list:
+        I += np.dot(K.T.conj(), K)
+    assert np.allclose(I, np.eye(3))
+    E = np.array(kraus_list).transpose(1,2,0).reshape(3,3,1,len(kraus_list))
+    return E
+
+def krauslist(gamma):
+    gamma = gamma # in [MHz]
+    kbT_over_hw = 0.5 # kb T / hbar w [a.u.]
+    tau = 1.0 # in [us]
+    dim = 3
+    eps = 1e-13
+    kraus_list = get_kraus_list(gamma, kbT_over_hw, tau, dim, eps)
+    I = np.zeros((3, 3), dtype=np.complex128)
+    for K in kraus_list:
+        I += np.dot(K.T.conj(), K)
+    assert np.allclose(I, np.eye(3))
+    return kraus_list
 
 def measCP(pm):
     Pi0 = np.array([[1,0,0],[0,0,0],[0,0,0]])
