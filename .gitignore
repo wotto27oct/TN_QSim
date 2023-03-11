@@ -44,3 +44,5 @@ simulate_sycamore
 Edmonds-Algorithm
 .python-version
 *.log
+*.lprof
+pymatching*.py

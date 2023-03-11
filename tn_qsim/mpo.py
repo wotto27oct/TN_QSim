@@ -45,9 +45,9 @@ class MPO(TensorNetwork):
         """
         self.apex = 0
         for i in range(self.n-1):
-            self.__move_right_canonical(threshold)
+            self.move_right_canonical(threshold=1.0)
         for i in range(self.n-1):
-            self.__move_left_canonical(threshold)
+            self.move_left_canonical(threshold)
 
     def contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -73,10 +73,10 @@ class MPO(TensorNetwork):
         if self.apex is not None:
             if tidx[0] < self.apex:
                 for _ in range(self.apex - tidx[0]):
-                    self.__move_left_canonical()
+                    self.move_left_canonical()
             elif tidx[0] > self.apex:
                 for _ in range(tidx[0] - self.apex):
-                    self.__move_right_canonical()
+                    self.move_right_canonical()
     
         is_direction_right = False
         if len(tidx) == 1:
@@ -169,10 +169,10 @@ class MPO(TensorNetwork):
         if self.apex is not None:
             if tidx[0] < self.apex:
                 for _ in range(self.apex - tidx[0]):
-                    self.__move_left_canonical()
+                    self.move_left_canonical()
             elif tidx[0] > self.apex:
                 for _ in range(tidx[0] - self.apex):
-                    self.__move_right_canonical()
+                    self.move_right_canonical()
     
         is_direction_right = False
         if len(tidx) == 1:
@@ -249,7 +249,7 @@ class MPO(TensorNetwork):
         """ sample from mpo
         """
         #for _ in range(self.apex, 0, -1):
-        #    self.__move_left_canonical()
+        #    self.move_left_canonical()
 
         np.random.seed(seed)
 
@@ -378,7 +378,7 @@ class MPO(TensorNetwork):
             self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / trace
         
         return total_fidelity
-
+    
     def apply_MPO_as_CPTP(self, tidx, mpo, is_truncate=False, is_normalize=False, is_dangling_final=False):
         """ apply MPO as CPTP map
 
@@ -479,7 +479,7 @@ class MPO(TensorNetwork):
         return total_fidelity
 
 
-    def __move_right_canonical(self, threshold=1.0):
+    def move_right_canonical(self, threshold=1.0):
         """ move canonical apex to right
         """
         if self.apex == self.n-1:
@@ -497,8 +497,8 @@ class MPO(TensorNetwork):
         self.apex = self.apex + 1
 
 
-    def __move_left_canonical(self, threshold=1.0):
-        """ move canonical apex to right
+    def move_left_canonical(self, threshold=1.0):
+        """ move canonical apex to left
         """
         if self.apex == 0:
             raise ValueError("can't move canonical apex to left")
