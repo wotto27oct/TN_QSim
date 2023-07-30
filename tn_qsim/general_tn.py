@@ -301,11 +301,13 @@ class TensorNetwork():
         #print(tn.get_equation(output_inds))
         #print(tn.inner_inds())
         #print(tn.outer_inds())
+        inputs, output, size_dict = tnq.get_inputs_output_size_dict(output_inds=output_inds)
+        #print(inputs, output, size_dict)
         if len(tnq.tensors) == 1:
             if visualize:
                 print("tensor network becomes one tensor after simplification")
             inputs, output, size_dict = tnq.get_inputs_output_size_dict(output_inds=output_inds)
-            #print(inputs, output)
+            #print(inputs, output, size_dict)
             tree = ctg.core.ContractionTree(inputs, output, size_dict, track_flops=True)
             tree.multiplicity = 1
             tree._flops = 1.0
