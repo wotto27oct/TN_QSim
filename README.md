@@ -3,6 +3,16 @@
 ## required libraries
 `numpy`, `jax`, `jaxlib`, `opt_einsum`, `kahypar`, `tqdm`, `optuna`, `autoray`, `tensornetwork`, `cotengra` is needed.
 
+## usage of repetition_code_simulation_with_GTA.py
+```
+python3 repetition_code_simulation_with_GTA.py ${dqnum} ${nround} ${theta} ${gamma} ${tau} ${temp} ${spread} ${rtype} ${init_state} ${seed} ${nshot} ${threshold_err} ${save_folder}
+```
+
+### usage example
+```
+python3 repetition_code_simulation_with_GTA.py 11 11 0.1 0.1 1.0 100 0.0 noreset 0 0 10 8 None
+```
+
 ## usage of RQCsimulation_tensorcore.py
 
 ```
