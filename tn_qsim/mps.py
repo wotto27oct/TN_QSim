@@ -36,22 +36,25 @@ class MPS(TensorNetwork):
             virtual_dims.append(self.nodes[i].get_dimension(2))
         return virtual_dims
 
+    def canonicalization(self, threshold=1.0):
+        """canonicalize MPO
+        apex point is set to be self.0
 
-    def canonicalization(self):
-        """canonicalize MPS
-        apex point = self.0
-
+        Args:
+            threshold (float) : truncation threshold for svd
         """
         self.apex = 0
+        fidelity = 1.0
         for i in range(self.n-1):
-            self.__move_right_canonical()
+            self.move_right_canonical(threshold=1.0)
         for i in range(self.n-1):
-            self.__move_left_canonical()
+            fidelity *= self.move_left_canonical(threshold)
+        return fidelity
 
     def set_apex(self, apex):
         self.canonicalization()
         for i in range(apex):
-            self.__move_right_canonical()
+            self.move_right_canonical()
 
 
     def contract(self):
@@ -153,6 +156,29 @@ class MPS(TensorNetwork):
 
         self.visualize_tree(tree, node_list, output_edge_order, path=path, visualize=visualize)
         return
+
+    def calc_trace(self):
+        left_tensor = oe.contract("abc,aBC->bBcC", self.nodes[0].tensor, self.nodes[0].tensor.conj())
+        for i in range(1, self.n):
+            left_tensor = oe.contract("dDbB,abc,aBC->dDcC", left_tensor, self.nodes[i].tensor, self.nodes[i].tensor.conj())
+        left_dim = left_tensor.shape[0] ** 2
+        return left_tensor.reshape(left_dim, -1)
+
+
+    def amplitude(self, tensors):
+        """Caluculate one amplitude of MPO
+
+        Args:
+            tensors (List[np.array]) : the amplitude tensor, (0-phys,...,(n-1)-phys,0-conj,...,(n-1)-conj)
+        
+        Returns:
+            np.array : result amplitude
+        """
+
+        left_tensor = oe.contract("abc,a->bc", self.nodes[0].tensor, tensors[0])
+        for i in range(1, self.n):
+            left_tensor = oe.contract("eb,abc,a->ec", left_tensor, self.nodes[i].tensor, tensors[i])
+        return left_tensor
 
     
     def prepare_foliation(self, cut_list):
@@ -265,10 +291,10 @@ class MPS(TensorNetwork):
         if self.apex is not None:
             if tidx[0] < self.apex:
                 for _ in range(self.apex - tidx[0]):
-                    self.__move_left_canonical()
+                    self.move_left_canonical()
             elif tidx[0] > self.apex:
                 for _ in range(tidx[0] - self.apex):
-                    self.__move_right_canonical()
+                    self.move_right_canonical()
     
         is_direction_right = False
         if len(tidx) == 1:
@@ -338,9 +364,259 @@ class MPS(TensorNetwork):
         self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
         
         return total_fidelity
+    
+    def scipy_svd(self, tensor, pivot_axis, max_singular_values=None, max_truncation_error=None, relative=False):
+        left_dims = tensor.shape[:pivot_axis]
+        right_dims = tensor.shape[pivot_axis:]
+
+        tensor = np.reshape(tensor, [np.prod(left_dims), np.prod(right_dims)])
+        import scipy
+        u, s, vh = scipy.linalg.svd(tensor, full_matrices=False)
+        if max_singular_values is None:
+            max_singular_values = np.size(s)
+
+        if max_truncation_error is not None:
+            # Cumulative norms of singular values in ascending order.
+            trunc_errs = np.sqrt(np.cumsum(np.square(s[::-1])))
+            # If relative is true, rescale max_truncation error with the largest
+            # singular value to yield the absolute maximal truncation error.
+            if relative:
+                abs_max_truncation_error = max_truncation_error * s[0]
+            else:
+                abs_max_truncation_error = max_truncation_error
+            # We must keep at least this many singular values to ensure the
+            # truncation error is <= abs_max_truncation_error.
+            num_sing_vals_err = np.count_nonzero(
+                (trunc_errs > abs_max_truncation_error).astype(np.int32))
+        else:
+            num_sing_vals_err = max_singular_values
+
+        num_sing_vals_keep = min(max_singular_values, num_sing_vals_err)
+
+        # tf.svd() always returns the singular values as a vector of float{32,64}.
+        # since tf.math_ops.real is automatically applied to s. This causes
+        # s to possibly not be the same dtype as the original tensor, which can cause
+        # issues for later contractions. To fix it, we recast to the original dtype.
+        s = s.astype(tensor.dtype)
+
+        s_rest = s[num_sing_vals_keep:]
+        s = s[:num_sing_vals_keep]
+        u = u[:, :num_sing_vals_keep]
+        vh = vh[:num_sing_vals_keep, :]
+
+        dim_s = s.shape[0]
+        u = np.reshape(u, list(left_dims) + [dim_s])
+        vh = np.reshape(vh, [dim_s] + list(right_dims))
+
+        return u, s, vh, s_rest
+    
+    def hermite_svd(self, tensor, pivot_axis, max_singular_values=None, max_truncation_error=None, relative=False):
+        left_dims = tensor.shape[:pivot_axis]
+        right_dims = tensor.shape[pivot_axis:]
+
+        tensor = np.reshape(tensor, [np.prod(left_dims), np.prod(right_dims)])
+
+        if tensor.shape[0] < tensor.shape[1]:
+            tensor2 = np.dot(tensor, tensor.T.conj())
+            u, s2, _ = np.linalg.svd(tensor2)
+            s = np.sqrt(s2)
+            vh = np.dot(u.T.conj(), tensor)
+            vh = np.dot(np.linalg.pinv(np.diag(s)), vh)
+        else:
+            tensor2 = np.dot(tensor.T.conj(), tensor)
+            _, s2, vh = np.linalg.svd(tensor2)
+            s = np.sqrt(s2)
+            u = np.dot(tensor, vh.T.conj())
+            u = np.dot(u, np.linalg.pinv(np.diag(s)))
+
+        if max_singular_values is None:
+            max_singular_values = np.size(s)
+
+        if max_truncation_error is not None:
+            # Cumulative norms of singular values in ascending order.
+            trunc_errs = np.sqrt(np.cumsum(np.square(s[::-1])))
+            # If relative is true, rescale max_truncation error with the largest
+            # singular value to yield the absolute maximal truncation error.
+            if relative:
+                abs_max_truncation_error = max_truncation_error * s[0]
+            else:
+                abs_max_truncation_error = max_truncation_error
+            # We must keep at least this many singular values to ensure the
+            # truncation error is <= abs_max_truncation_error.
+            num_sing_vals_err = np.count_nonzero(
+                (trunc_errs > abs_max_truncation_error).astype(np.int32))
+        else:
+            num_sing_vals_err = max_singular_values
+
+        num_sing_vals_keep = min(max_singular_values, num_sing_vals_err)
+
+        # tf.svd() always returns the singular values as a vector of float{32,64}.
+        # since tf.math_ops.real is automatically applied to s. This causes
+        # s to possibly not be the same dtype as the original tensor, which can cause
+        # issues for later contractions. To fix it, we recast to the original dtype.
+        s = s.astype(tensor.dtype)
+
+        s_rest = s[num_sing_vals_keep:]
+        s = s[:num_sing_vals_keep]
+        u = u[:, :num_sing_vals_keep]
+        vh = vh[:num_sing_vals_keep, :]
+
+        dim_s = s.shape[0]
+        u = np.reshape(u, list(left_dims) + [dim_s])
+        vh = np.reshape(vh, [dim_s] + list(right_dims))
+
+        return u, s, vh, s_rest
+
+    def split_node_full_svd(self, node, left_edges, right_edges, max_singular_values=None, max_truncation_err=None, relative=False, left_name=None, middle_name=None, right_name=None, left_edge_name=None, right_edge_name=None):
+        if not hasattr(node, 'backend'):
+            raise AttributeError('Node {} of type {} has no `backend`'.format(
+                node, type(node)))
+
+        if node.axis_names and left_edge_name and right_edge_name:
+            left_axis_names = []
+            right_axis_names = [right_edge_name]
+            for edge in left_edges:
+                left_axis_names.append(node.axis_names[edge.axis1] if edge.node1 is node
+                                    else node.axis_names[edge.axis2])
+            for edge in right_edges:
+                right_axis_names.append(node.axis_names[edge.axis1] if edge.node1 is node
+                                    else node.axis_names[edge.axis2])
+            left_axis_names.append(left_edge_name)
+            center_axis_names = [left_edge_name, right_edge_name]
+        else:
+            left_axis_names = None
+            center_axis_names = None
+            right_axis_names = None
+
+        backend = node.backend
+        transp_tensor = node.tensor_from_edge_order(left_edges + right_edges)
+
+        try:
+            u, s, vh, trun_vals = backend.svd(transp_tensor,
+                                            len(left_edges),
+                                            max_singular_values,
+                                            max_truncation_err,
+                                            relative=relative)
+        except:
+            print("hermite svd selected")
+            u, s, vh, trun_vals = self.hermite_svd(transp_tensor,
+                                            len(left_edges),
+                                            max_singular_values,
+                                            max_truncation_err,
+                                            relative=relative)
+
+        left_node = tn.Node(u,
+                        name=left_name,
+                        axis_names=left_axis_names,
+                        backend=backend)
+        singular_values_node = tn.Node(backend.diagflat(s),
+                                    name=middle_name,
+                                    axis_names=center_axis_names,
+                                    backend=backend)
+
+        right_node = tn.Node(vh,
+                            name=right_name,
+                            axis_names=right_axis_names,
+                            backend=backend)
+
+        left_axes_order = [
+            edge.axis1 if edge.node1 is node else edge.axis2 for edge in left_edges
+        ]
+        for i, edge in enumerate(left_edges):
+            left_node.add_edge(edge, i)
+            edge.update_axis(left_axes_order[i], node, i, left_node)
+
+        right_axes_order = [
+            edge.axis1 if edge.node1 is node else edge.axis2 for edge in right_edges
+        ]
+        for i, edge in enumerate(right_edges):
+            # i + 1 to account for the new edge.
+            right_node.add_edge(edge, i + 1)
+            edge.update_axis(right_axes_order[i], node, i + 1, right_node)
+        tn.connect(left_node.edges[-1],
+                singular_values_node.edges[0],
+                name=left_edge_name)
+        tn.connect(singular_values_node.edges[1],
+                right_node.edges[0],
+                name=right_edge_name)
+        node.fresh_edges(node.axis_names)
+        return left_node, singular_values_node, right_node, trun_vals
+    
+    def canonicalize_support(self, tidx, threshold=1.0):
+        """canonicalize mps in given support
+        suppose mps except for the support is already canonicalized
+
+        Args:
+            threshold (float) : truncation threshold for svd
+        """
+        fidelity = 1.0
+        self.apex = tidx[-1]
+
+        # move apex to tidx[0]
+        if tidx[0] < self.apex:
+            for _ in range(self.apex - tidx[0]):
+                self.move_left_canonical()
+        elif tidx[0] > self.apex:
+            for _ in range(tidx[0] - self.apex):
+                self.move_right_canonical()
+        
+        # move apex to tidx[-1] and truncate
+        #print("before move", self.virtual_dims)
+        if tidx[-1] < self.apex:
+            for i in range(self.apex - tidx[-1]):
+                fidelity *= self.move_left_canonical(threshold=threshold)
+        elif tidx[-1] > self.apex:
+            for i in range(tidx[-1] - self.apex):
+                fidelity *= self.move_right_canonical(threshold=threshold)
+        #print("after move", self.virtual_dims)
+        #print("fidelity", fidelity)
+        
+        return fidelity
+    
+    def apply_MPO_without_truncation(self, tidx, mpo):
+        """apply MPO without truncation
+        mps within the support is no more canonicalized
+
+        Args:
+            tidx (list of int) : list of qubit index we apply to.
+            mpo (MPO) : MPO tensornetwork.
+        """
+        fidelity = 1.0
+
+        # move apex to tidx[0]
+        if tidx[0] < self.apex:
+            for _ in range(self.apex - tidx[0]):
+                self.move_left_canonical()
+        elif tidx[0] > self.apex:
+            for _ in range(tidx[0] - self.apex):
+                self.move_right_canonical()
+
+        is_direction_right = False
+        if len(tidx) == 1:
+            is_direction_right = True
+        else:
+            if tidx[1] - tidx[0] == 1:
+                is_direction_right = True
+        for i in range(len(tidx)-1):
+            if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
+                raise ValueError("mpo must be applied in sequential to MPS")
+
+        # update mps tensors with mpo tensors
+        for i, node in enumerate(mpo.nodes):
+            if is_direction_right:
+                dimA, dima, dimB, dimC = node.tensor.shape
+                dima, dimb, dimc = self.nodes[tidx[i]].tensor.shape
+                tensor = oe.contract("abc,AaBC->AbBcC", self.nodes[tidx[i]].tensor, node.tensor).reshape(dimA, dimb*dimB, dimc*dimC)
+            else:
+                dimA, dima, dimC, dimB = node.tensor.shape
+                dima, dimb, dimc = self.nodes[tidx[i]].tensor.shape
+                tensor = oe.contract("abc,AaCB->AbBcC", self.nodes[tidx[i]].tensor, node.tensor).reshape(dimA, dimb*dimB, dimc*dimC)
+            self.nodes[tidx[i]].tensor = tensor
+
+        return fidelity
 
 
-    def apply_MPO(self, tidx, mpo, is_normalize=True, last_dir=None, is_return_history=False):
+    def apply_MPO(self, tidx, mpo, is_truncate=False, is_normalize=False, is_return_history=False):
         """ apply MPO
 
         Args:
@@ -349,13 +625,13 @@ class MPS(TensorNetwork):
         """
 
         # apexをtidx[0]に合わせる
-        if self.apex is not None:
+        if is_truncate and self.apex is not None:
             if tidx[0] < self.apex:
                 for _ in range(self.apex - tidx[0]):
-                    self.__move_left_canonical()
+                    self.move_left_canonical()
             elif tidx[0] > self.apex:
                 for _ in range(tidx[0] - self.apex):
-                    self.__move_right_canonical()
+                    self.move_right_canonical()
     
         is_direction_right = False
         if len(tidx) == 1:
@@ -365,7 +641,7 @@ class MPS(TensorNetwork):
                 is_direction_right = True
         for i in range(len(tidx)-1):
             if is_direction_right and tidx[i+1] - tidx[i] != 1 or not is_direction_right and tidx[i+1] - tidx[i] != -1:
-                raise ValueError("gate must be applied in sequential to MPS")
+                raise ValueError("mpo must be applied in sequential to MPS")
         
         dir = 2 if is_direction_right else 1
 
@@ -376,30 +652,41 @@ class MPS(TensorNetwork):
         mps_list = []
         if len(tidx) == 1:
             node = mpo.nodes[0]
+            if node[2].dimension != 1 and not self.nodes[tidx[0]][1].is_dangling():
+                raise ValueError("MPO has non-dim1 dangling edge at the first edge")
+            if node[3].dimension != 1 and not self.nodes[tidx[0]][2].is_dangling():
+                raise ValueError("MPO has non-dim1 dangling edge at the final edge")
             node_contract_list = [node, self.nodes[tidx[0]]]
             node_edge_list = [node[0]] + [self.nodes[tidx[0]][j] for j in range(1, 3)]
-            if last_dir is None:
+            if node[2].dimension == 1:
                 one = tn.Node(np.array([1]))
                 tn.connect(node[2], one[0])
                 node_contract_list.append(one)
+            else:
+                node_edge_list.append(node[2])
+            if node[3].dimension == 1:
                 one2 = tn.Node(np.array([1]))
                 tn.connect(node[3], one2[0])
                 node_contract_list.append(one2)
             else:
-                node_edge_list += [node[2], node[3]]
+                node_edge_list.append(node[3])
             tn.connect(node[1], self.nodes[tidx[0]][0])
             new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
-            if last_dir is not None:
-                # TODO: unit test
-                tn.flatten_edges([new_node[1], new_node[3]]) # left
-                tn.flatten_edges([new_node[1], new_node[2]]) # right
+            if node[3].dimension != 1:
+                # flatten right edges, 0,1,2,3,4->0,1,3,(2,4) or 0,1,2,3->0,1,(2,3)
+                tn.flatten_edges([new_node[2], new_node[-1]])
+            if node[2].dimension != 1:
+                # flatten left edges, 0,1,2,3->0,3,(1,2)->0,(1,2),3
+                tn.flatten_edges([new_node[1], new_node[2]])
+                reorder_list = [new_node[i] for i in [0,2,1]]
+                new_node.reorder_edges(reorder_list)
             node_list.append(new_node)
         else:
             for i, node in enumerate(mpo.nodes):
                 if i == 0:
                     node_contract_list = [node, self.nodes[tidx[i]]]
                     node_edge_list = [node[0]] + [self.nodes[tidx[i]][j] for j in range(1, 3)] + [node[3]]
-                    if last_dir is None:
+                    if node[2].dimension == 1:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[2], one[0])
                         node_contract_list.append(one)
@@ -407,11 +694,17 @@ class MPS(TensorNetwork):
                         node_edge_list.append(node[2])
                     tn.connect(node[1], self.nodes[tidx[i]][0])
                     new_node = tn.contractors.auto(node_contract_list, output_edge_order=node_edge_list)
-                    if last_dir is not None:
-                        # flatten left edges, 0, 1, 2, 3, 4 -> 0, 2, 3, (1,4) -> 0, (1,4), 2, 3
-                        tn.flatten_edges([new_node[1], new_node[4]])
-                        reorder_list = [new_node[i] for i in [0,3,1,2]]
-                        new_node.reorder_edges(reorder_list)
+                    if node[2].dimension != 1:
+                        if is_direction_right:
+                            # flatten left edges, 0, 1, 2, 3, 4 -> 0, 2, 3, (1,4) -> 0, (1,4), 2, 3
+                            tn.flatten_edges([new_node[1], new_node[4]])
+                            reorder_list = [new_node[i] for i in [0,3,1,2]]
+                            new_node.reorder_edges(reorder_list)
+                        else:
+                            # flatten left edges, 0, 1, 2, 3, 4 -> 0, 1, 3, (2,4) -> 0, 1, (2,4), 3
+                            tn.flatten_edges([new_node[2], new_node[4]])
+                            reorder_list = [new_node[i] for i in [0,1,3,2]]
+                            new_node.reorder_edges(reorder_list)
                     node_list.append(new_node)
                     edge_list.append(node_edge_list)
                 else:
@@ -434,21 +727,26 @@ class MPS(TensorNetwork):
                     # contract left_R, right_R, node
                     svd_node_edge_list = None
                     svd_node_list = [lR, rR, node]
-                    if i == mpo.n - 1 and last_dir is None:
+                    if i == mpo.n - 1 and node[3].dimension == 1:
                         one = tn.Node(np.array([1]))
                         tn.connect(node[3], one[0])
                         svd_node_edge_list = [qr_left_edge, node[0], qr_right_edge]
                         svd_node_list.append(one)
                     else:
                         svd_node_edge_list = [qr_left_edge, node[0], node[3], qr_right_edge]
+                    
                     svd_node = tn.contractors.optimal(svd_node_list, output_edge_order=svd_node_edge_list)
 
                     # split via SVD for truncation
-                    if svd_node.tensor.shape[0] > 1:
-                        U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threshold_err, relative=True)
+                    if is_truncate:
+                        if svd_node.tensor.shape[0] > 1:
+                            U, s, Vh, trun_s = self.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threshold_err, relative=True)
+                        else:
+                            U, s, Vh, trun_s = self.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threshold_err)
                     else:
-                        U, s, Vh, trun_s = tn.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))], self.truncate_dim, self.threshold_err)
-                    
+                        
+                        U, s, Vh, trun_s = self.split_node_full_svd(svd_node, [svd_node[0]], [svd_node[i] for i in range(1, len(svd_node.edges))])
+                            
                     # calc fidelity for normalization
                     if len(s.tensor) != 0:
                         s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
@@ -459,7 +757,7 @@ class MPS(TensorNetwork):
                     l_edge_order = [lQ.edges[i] for i in range(0, dir)] + [s[0]] + [lQ.edges[i] for i in range(dir, 2)]
                     node_list[i-1] = tn.contractors.optimal([lQ, U], output_edge_order=l_edge_order)
                     r_edge_order = None
-                    if i == mpo.n - 1 and last_dir is None:
+                    if i == mpo.n - 1 and node[3].dimension == 1:
                         if dir == 2: # right
                             r_edge_order = [Vh[1]] + [s[0]] + [rQ.edges[0]]
                         else:
@@ -470,12 +768,16 @@ class MPS(TensorNetwork):
                         else:
                             r_edge_order = [Vh[1]] + [rQ.edges[0]] + [s[0]] + [Vh[2]]
                     new_node = tn.contractors.optimal([s, Vh, rQ], output_edge_order=r_edge_order)
-                    if i == mpo.n - 1 and last_dir is not None:
-                        if last_dir == 2: # right:
+                    if i == mpo.n - 1 and node[3].dimension != 1:
+                        if dir == 2: # right:
+                            # flatten right edges, 0, 1, 2, 3 -> 0, 1, (2, 3)
                             tn.flatten_edges([new_node[2], new_node[3]])
                         else:
-                            # TODO: unit test
-                            raise ValueError("not implemented yet")
+                            # flatten left edges, 0, 1, 2, 3 -> 0, 2, (1,3) -> 0, (1,3), 2
+                            tn.flatten_edges([new_node[1], new_node[3]])
+                            reorder_list = [new_node[i] for i in [0,2,1]]
+                            new_node.reorder_edges(reorder_list)
+                            
                     node_list.append(new_node)
                 
                 if is_return_history:
@@ -488,8 +790,31 @@ class MPS(TensorNetwork):
         if self.apex is not None:
             self.apex = tidx[-1]
         
+        #if is_normalize:
+        #    self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
+
         if is_normalize:
-            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(total_fidelity)
+            trace = self.calc_trace() # must be 2D array
+            if trace.shape[0] != 1:
+                if trace.shape[0] == 4:
+                    # connect with bell-pair
+                    # bell = np.array([1, 0, 0, 1]) / 2
+                    trace = oe.contract("ab,a->b", trace, bell)
+                else:
+                    print("Error! trace of the MPO seems to be strange (cannnot calculated)")
+            else:
+                trace = trace[0]
+            if trace.shape[0] != 1:
+                if trace.shape[0] == 4:
+                    # connect with bell-pair
+                    bell = np.array([1, 0, 0, 1]) / 2
+                    trace = oe.contract("a,a", trace, bell)
+                else:
+                    print("Error! trace of the MPO seems to be strange (cannnot calculated)")
+            else:
+                trace = trace[0]
+
+            self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / np.sqrt(trace)
         
         if not is_return_history:
             return total_fidelity
@@ -501,7 +826,7 @@ class MPS(TensorNetwork):
         """ sample from mps
         """
         for _ in range(self.apex, 0, -1):
-            self.__move_left_canonical()
+            self.move_left_canonical()
 
         np.random.seed(seed)
 
@@ -522,14 +847,17 @@ class MPS(TensorNetwork):
         return np.array(output)
 
 
-    def __move_right_canonical(self):
+    def move_right_canonical(self, threshold=1.0):
         """ move canonical apex to right
         """
         if self.apex == self.n-1:
             raise ValueError("can't move canonical apex to right")
+        if self.nodes[self.apex].tensor.shape[2] == 1:
+            self.apex = self.apex + 1
+            return 1.0
         l_edges = self.nodes[self.apex].get_all_edges()
         r_edges = self.nodes[self.apex+1].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1]], [l_edges[2]])
+        U, s, Vh, trun_s = self.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1]], [l_edges[2]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], s[0]])
         self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh, self.nodes[self.apex+1]], output_edge_order=[r_edges[0], s[0], r_edges[2]])
 
@@ -539,15 +867,23 @@ class MPS(TensorNetwork):
 
         self.apex = self.apex + 1
 
+        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+        trun_s_sq = np.dot(trun_s, trun_s)
+        fidelity = s_sq / (s_sq + trun_s_sq)
+        return fidelity
+
     
-    def __move_left_canonical(self):
+    def move_left_canonical(self, threshold=1.0):
         """ move canonical apex to right
         """
         if self.apex == 0:
             raise ValueError("can't move canonical apex to left")
+        if self.nodes[self.apex].tensor.shape[1] == 1:
+            self.apex = self.apex - 1
+            return 1.0
         l_edges = self.nodes[self.apex-1].get_all_edges()
         r_edges = self.nodes[self.apex].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[1]], [r_edges[0], r_edges[2]])
+        U, s, Vh, trun_s = self.split_node_full_svd(self.nodes[self.apex], [r_edges[1]], [r_edges[0], r_edges[2]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], s[1], r_edges[2]])
         self.nodes[self.apex-1] = tn.contractors.optimal([self.nodes[self.apex-1], U, s], output_edge_order=[l_edges[0], l_edges[1], s[1]])
 
@@ -556,3 +892,8 @@ class MPS(TensorNetwork):
         self.nodes[self.apex][1].set_name(f"edge {self.apex+self.n}")
 
         self.apex = self.apex - 1
+        
+        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+        trun_s_sq = np.dot(trun_s, trun_s)
+        fidelity = s_sq / (s_sq + trun_s_sq)
+        return fidelity

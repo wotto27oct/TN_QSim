@@ -44,10 +44,12 @@ class MPO(TensorNetwork):
             threshold (float) : truncation threshold for svd
         """
         self.apex = 0
+        fidelity = 1.0
         for i in range(self.n-1):
-            self.__move_right_canonical(threshold)
+            fidelity *= self.move_right_canonical(threshold=1.0)
         for i in range(self.n-1):
-            self.__move_left_canonical(threshold)
+            fidelity *= self.move_left_canonical(threshold)
+        return fidelity
 
     def contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -73,10 +75,10 @@ class MPO(TensorNetwork):
         if self.apex is not None:
             if tidx[0] < self.apex:
                 for _ in range(self.apex - tidx[0]):
-                    self.__move_left_canonical()
+                    self.move_left_canonical()
             elif tidx[0] > self.apex:
                 for _ in range(tidx[0] - self.apex):
-                    self.__move_right_canonical()
+                    self.move_right_canonical()
     
         is_direction_right = False
         if len(tidx) == 1:
@@ -169,10 +171,10 @@ class MPO(TensorNetwork):
         if self.apex is not None:
             if tidx[0] < self.apex:
                 for _ in range(self.apex - tidx[0]):
-                    self.__move_left_canonical()
+                    self.move_left_canonical()
             elif tidx[0] > self.apex:
                 for _ in range(tidx[0] - self.apex):
-                    self.__move_right_canonical()
+                    self.move_right_canonical()
     
         is_direction_right = False
         if len(tidx) == 1:
@@ -249,7 +251,7 @@ class MPO(TensorNetwork):
         """ sample from mpo
         """
         #for _ in range(self.apex, 0, -1):
-        #    self.__move_left_canonical()
+        #    self.move_left_canonical()
 
         np.random.seed(seed)
 
@@ -378,7 +380,7 @@ class MPO(TensorNetwork):
             self.nodes[tidx[-1]].tensor = self.nodes[tidx[-1]].tensor / trace
         
         return total_fidelity
-
+    
     def apply_MPO_as_CPTP(self, tidx, mpo, is_truncate=False, is_normalize=False, is_dangling_final=False):
         """ apply MPO as CPTP map
 
@@ -458,7 +460,7 @@ class MPO(TensorNetwork):
             if trace.shape[0] != 1:
                 if trace.shape[0] == 4:
                     # connect with bell-pair
-                    bell = np.array([1, 0, 0, 1]) / 2
+                    # bell = np.array([1, 0, 0, 1]) / 2
                     trace = oe.contract("ab,a->b", trace, bell)
                 else:
                     print("Error! trace of the MPO seems to be strange (cannnot calculated)")
@@ -479,14 +481,14 @@ class MPO(TensorNetwork):
         return total_fidelity
 
 
-    def __move_right_canonical(self, threshold=1.0):
+    def move_right_canonical(self, threshold=1.0):
         """ move canonical apex to right
         """
         if self.apex == self.n-1:
             raise ValueError("can't move canonical apex to right")
         l_edges = self.nodes[self.apex].get_all_edges()
         r_edges = self.nodes[self.apex+1].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]], max_truncation_err=1-threshold)
+        U, s, Vh, trun_s = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], l_edges[2], s[0]])
         self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh, self.nodes[self.apex+1]], output_edge_order=[r_edges[0], r_edges[1], s[0], r_edges[3]])
 
@@ -496,15 +498,21 @@ class MPO(TensorNetwork):
 
         self.apex = self.apex + 1
 
+        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+        trun_s_sq = np.dot(trun_s, trun_s)
+        fidelity = s_sq / (s_sq + trun_s_sq)
+        return fidelity
 
-    def __move_left_canonical(self, threshold=1.0):
-        """ move canonical apex to right
+
+
+    def move_left_canonical(self, threshold=1.0):
+        """ move canonical apex to left
         """
         if self.apex == 0:
             raise ValueError("can't move canonical apex to left")
         l_edges = self.nodes[self.apex-1].get_all_edges()
         r_edges = self.nodes[self.apex].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]], max_truncation_err=1-threshold)
+        U, s, Vh, trun_s = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], r_edges[1], s[1], r_edges[3]])
         self.nodes[self.apex-1] = tn.contractors.optimal([self.nodes[self.apex-1], U, s], output_edge_order=[l_edges[0], l_edges[1], l_edges[2], s[1]])
 
@@ -513,3 +521,9 @@ class MPO(TensorNetwork):
         self.nodes[self.apex][2].set_name(f"edge {self.apex+2*self.n}")
 
         self.apex = self.apex - 1
+
+        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+        trun_s_sq = np.dot(trun_s, trun_s)
+        fidelity = s_sq / (s_sq + trun_s_sq)
+        return fidelity
+

@@ -39,9 +39,13 @@ taskflow
 *.yaml
 .DS_Store
 TC_RCS*
-<<<<<<< HEAD
 SWQsim
 simulate_sycamore
-=======
+Edmonds-Algorithm
+.python-version
 *.log
->>>>>>> origin/cupy
+*.lprof
+pymatching*.py
+*.e*
+*.o*
+thermal_noise_model/
