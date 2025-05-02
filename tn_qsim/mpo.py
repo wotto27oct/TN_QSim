@@ -44,10 +44,12 @@ class MPO(TensorNetwork):
             threshold (float) : truncation threshold for svd
         """
         self.apex = 0
+        fidelity = 1.0
         for i in range(self.n-1):
-            self.move_right_canonical(threshold=1.0)
+            fidelity *= self.move_right_canonical(threshold=1.0)
         for i in range(self.n-1):
-            self.move_left_canonical(threshold)
+            fidelity *= self.move_left_canonical(threshold)
+        return fidelity
 
     def contract(self):
         cp_nodes = tn.replicate_nodes(self.nodes)
@@ -486,7 +488,7 @@ class MPO(TensorNetwork):
             raise ValueError("can't move canonical apex to right")
         l_edges = self.nodes[self.apex].get_all_edges()
         r_edges = self.nodes[self.apex+1].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]], max_truncation_err=1-threshold, relative=True)
+        U, s, Vh, trun_s = tn.split_node_full_svd(self.nodes[self.apex], [l_edges[0], l_edges[1], l_edges[2]], [l_edges[3]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = U.reorder_edges([l_edges[0], l_edges[1], l_edges[2], s[0]])
         self.nodes[self.apex+1] = tn.contractors.optimal([s, Vh, self.nodes[self.apex+1]], output_edge_order=[r_edges[0], r_edges[1], s[0], r_edges[3]])
 
@@ -496,6 +498,12 @@ class MPO(TensorNetwork):
 
         self.apex = self.apex + 1
 
+        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+        trun_s_sq = np.dot(trun_s, trun_s)
+        fidelity = s_sq / (s_sq + trun_s_sq)
+        return fidelity
+
+
 
     def move_left_canonical(self, threshold=1.0):
         """ move canonical apex to left
@@ -504,7 +512,7 @@ class MPO(TensorNetwork):
             raise ValueError("can't move canonical apex to left")
         l_edges = self.nodes[self.apex-1].get_all_edges()
         r_edges = self.nodes[self.apex].get_all_edges()
-        U, s, Vh, _ = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]], max_truncation_err=1-threshold, relative=True)
+        U, s, Vh, trun_s = tn.split_node_full_svd(self.nodes[self.apex], [r_edges[2]], [r_edges[0], r_edges[1], r_edges[3]], max_truncation_err=1-threshold, relative=True)
         self.nodes[self.apex] = Vh.reorder_edges([r_edges[0], r_edges[1], s[1], r_edges[3]])
         self.nodes[self.apex-1] = tn.contractors.optimal([self.nodes[self.apex-1], U, s], output_edge_order=[l_edges[0], l_edges[1], l_edges[2], s[1]])
 
@@ -513,3 +521,9 @@ class MPO(TensorNetwork):
         self.nodes[self.apex][2].set_name(f"edge {self.apex+2*self.n}")
 
         self.apex = self.apex - 1
+
+        s_sq = np.dot(np.diag(s.tensor), np.diag(s.tensor))
+        trun_s_sq = np.dot(trun_s, trun_s)
+        fidelity = s_sq / (s_sq + trun_s_sq)
+        return fidelity
+

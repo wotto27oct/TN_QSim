@@ -23,6 +23,11 @@ X = np.array([[0,1,0],[1,0,0],[0,0,1]])
 Z = np.array([[1,0,0],[0,-1,0],[0,0,1]])
 Y = -1j*np.dot(X,Z)
 
+I2 = np.eye(2)
+X2 = np.array([[0, 1], [1, 0]])
+Z2 = np.array([[1, 0], [0, -1]])
+Y2 = -1j*np.dot(X2, Z2)
+
 i2 = 1.0 / np.sqrt(2)
 Hadamard = np.array([[i2,i2,0],[i2,-i2,0],[0,0,1]]).astype(dtype=np.complex128)
 
@@ -62,6 +67,16 @@ def Rot(theta, phi, lam, varphi):
     R12_1 = R12(theta, phi, lam)
     Rz = RZ(varphi)
     return np.dot(Rz, np.dot(R02_0, R12_1))
+
+def Rot4(theta, phi, lam, varphi):
+    R02_0 = R02(theta, phi, lam)
+    R12_1 = R12(theta, phi, lam)
+    Rz = RZ(varphi)
+    Urot = np.dot(Rz, np.dot(R02_0, R12_1))
+    res = np.zeros((4, 4)).astype(np.complex128)
+    res[:3,:3] = Urot
+    res[3,3] = 1.0
+    return res
 
 def AD(p):
     K0 = np.array([[1,0,0],[0,np.sqrt(1-p),0],[0,0,1-p]])
@@ -120,6 +135,20 @@ def krauslist_by_gamma_tau_temp(gamma, tau, temp):
     kbT_over_hw = 13.1 * temp / 1000.0 # kb T / hbar w [a.u.]
     tau = tau # in [us]
     dim = 3
+    eps = 1e-13
+    kraus_list = get_kraus_list(gamma, kbT_over_hw, tau, dim, eps)
+    I = np.zeros((3, 3), dtype=np.complex128)
+    for K in kraus_list:
+        I += np.dot(K.T.conj(), K)
+    assert np.allclose(I, np.eye(3))
+    return kraus_list
+
+def krauslist_by_gamma_tau_temp4(gamma, tau, temp):
+    gamma = gamma # in [MHz]
+    temp = temp # in [mK]
+    kbT_over_hw = 13.1 * temp / 1000.0 # kb T / hbar w [a.u.]
+    tau = tau # in [us]
+    dim = 4
     eps = 1e-13
     kraus_list = get_kraus_list(gamma, kbT_over_hw, tau, dim, eps)
     I = np.zeros((3, 3), dtype=np.complex128)

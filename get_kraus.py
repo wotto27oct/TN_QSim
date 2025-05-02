@@ -174,7 +174,7 @@ def get_kraus_list(gamma: float, kbT_over_hw: float, tau: float, dim: int, eps: 
         N = 1 / (np.exp(1/kbT_over_hw) - 1)
     gm = gamma * (N+1)
     gp = gamma * N
-    print(gm, gp)
+    #print(gm, gp)
 
     process = get_damping_process(gm, gp, tau, dim)
     kraus_list = convert_process_to_kraus(process, dim, eps)

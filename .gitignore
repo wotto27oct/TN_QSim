@@ -46,3 +46,6 @@ Edmonds-Algorithm
 *.log
 *.lprof
 pymatching*.py
+*.e*
+*.o*
+thermal_noise_model/
